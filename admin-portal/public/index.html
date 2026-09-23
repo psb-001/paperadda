@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PYQ Hub — Admin Portal</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ============ SIDEBAR ============ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">P</div>
+        <div>
+          <div class="brand-name">PYQ Hub</div>
+          <div class="brand-sub">Admin Portal</div>
+        </div>
+      </div>
+      <nav class="nav" id="mainNav">
+        <button class="nav-item active" data-view="dashboard">
+          <span class="nav-ico">▦</span> Dashboard
+        </button>
+        <button class="nav-item" data-view="papers">
+          <span class="nav-ico">▤</span> Papers
+        </button>
+        <button class="nav-item" data-view="subjects">
+          <span class="nav-ico">▥</span> Subjects
+        </button>
+        <button class="nav-item" data-view="notes">
+          <span class="nav-ico">✎</span> Notes
+        </button>
+        <button class="nav-item" data-view="data">
+          <span class="nav-ico">⇅</span> Backup &amp; Sync
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="pill">☁ Cloud connected</div>
+        <p id="adminEmail" class="muted" style="margin:0 0 8px"></p>
+        <p>Uploads go straight to Supabase — visible in the app.</p>
+        <button class="btn small ghost" id="btnLogout" style="color:#dbe4f5;margin-top:8px">Log out</button>
+      </div>
+    </aside>
+
+    <!-- ============ MAIN ============ -->
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle">Dashboard</h1>
+          <p id="viewSubtitle">Overview of your catalog</p>
+        </div>
+        <div class="topbar-actions" id="topbarActions"></div>
+      </header>
+
+      <section class="view active" id="view-dashboard"></section>
+      <section class="view" id="view-papers"></section>
+      <section class="view" id="view-subjects"></section>
+      <section class="view" id="view-notes"></section>
+      <section class="view" id="view-data"></section>
+    </main>
+  </div>
+
+  <!-- Login gate (admin only) -->
+  <div class="login-backdrop" id="loginBackdrop" hidden>
+    <div class="login-card">
+      <div class="brand-icon" style="margin:0 auto 12px">P</div>
+      <h2>PYQ Hub Admin</h2>
+      <p class="muted">Sign in with your admin account. Students never see this page.</p>
+      <div class="field"><label>Email</label><input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com" /></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" autocomplete="current-password" placeholder="••••••••" /></div>
+      <p class="hint" id="loginError" style="color:var(--danger);min-height:18px"></p>
+      <button class="btn" id="btnLogin" style="width:100%">Sign in</button>
+    </div>
+  </div>
+
+  <!-- Modal + toast roots -->
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head">
+        <h2 id="modalTitle">Modal</h2>
+        <button class="icon-btn" id="modalClose" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-foot" id="modalFoot"></div>
+    </div>
+  </div>
+  <div class="toast-wrap" id="toastWrap"></div>
+
+  <script src="js/config.js"></script>
+  <script src="js/db.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
