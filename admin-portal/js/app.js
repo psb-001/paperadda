@@ -1,18 +1,20 @@
 /* ============================================================
- * PYQ Hub Admin — UI (vanilla JS, no build step).
- * If/when Supabase lands, only js/db.js gets swapped.
+ * PaperAdda Admin — UI (vanilla JS, no build step).
+ * Workflow: Home tiles → one modal → done. Advanced fields hidden.
  * ============================================================ */
 "use strict";
+
+const PREFS_KEY = "paperadda-admin-prefs";
 
 const state = {
   view: "dashboard",
   subjects: [],
   papers: [],
   notes: [],
-  paperFilter: { branch: "", subject: "", q: "" },
-  subjectFilter: { branch: "ENTC", year: "" },
+  paperFilter: { branch: "", q: "" },
+  subjectFilter: { branch: "", year: "" },
   noteFilter: { branch: "" },
-  pendingFile: null, // File object chosen in the paper modal
+  pendingFile: null,
 };
 
 /* ---------------- helpers ---------------- */
@@ -36,6 +38,14 @@ const fmtDate = (ts) => {
 
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 40);
 
+function loadPrefs() {
+  try { return JSON.parse(localStorage.getItem(PREFS_KEY) || "{}"); }
+  catch { return {}; }
+}
+function savePrefs(p) {
+  localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...p }));
+}
+
 function toast(msg, kind) {
   const el = document.createElement("div");
   el.className = "toast" + (kind ? " " + kind : "");
@@ -51,14 +61,14 @@ function openModal(title, bodyHTML, buttons) {
   foot.innerHTML = "";
   (buttons || [{ label: "Close" }]).forEach((b) => {
     const btn = document.createElement("button");
-    btn.className = "btn " + (b.kind || "");
+    btn.className = "btn " + (b.kind || "secondary");
     btn.textContent = b.label;
     btn.onclick = async () => {
       try {
         if (b.onClick) await b.onClick();
       } catch (err) {
         toast(err.message || "Something failed", "err");
-        return; // keep the modal open so nothing is lost
+        return;
       }
       if (!b.keepOpen) closeModal();
     };
@@ -79,10 +89,36 @@ document.addEventListener("keydown", (e) => {
 });
 
 function confirmDialog(title, message, confirmLabel, onConfirm) {
-  openModal(title, `<p>${esc(message)}</p>`, [
+  openModal(title, `<p class="muted">${esc(message)}</p>`, [
     { label: "Cancel", kind: "secondary" },
     { label: confirmLabel || "Delete", kind: "danger", onClick: onConfirm },
   ]);
+}
+
+function wireDropzone(dropId, fileId, infoId, onFile) {
+  const drop = $("#" + dropId), input = $("#" + fileId);
+  if (!drop || !input) return;
+  drop.addEventListener("click", () => input.click());
+  ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.add("over");
+  }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); drop.classList.remove("over");
+  }));
+  drop.addEventListener("drop", (e) => {
+    if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
+  });
+  input.addEventListener("change", () => {
+    if (input.files.length) onFile(input.files[0]);
+  });
+}
+
+function acceptPdf(file) {
+  if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    toast("Please choose a PDF", "err");
+    return false;
+  }
+  return true;
 }
 
 /* ---------------- boot ---------------- */
@@ -140,7 +176,7 @@ async function bootApp() {
   }
   const s = JSON.parse(localStorage.getItem("pyq-admin-session") || "{}");
   $("#adminEmail").textContent = s.email || "";
-  toast("Connected to Supabase ☁", "ok");
+  toast("Connected to Supabase", "ok");
   switchView("dashboard");
 }
 
@@ -148,7 +184,10 @@ async function reloadAll() {
   const [subjects, papers, notes] = await Promise.all([
     DB.getAll("subjects"), DB.getAll("papers"), DB.getAll("notes"),
   ]);
-  state.subjects = subjects.sort((a, b) => a.branchCode.localeCompare(b.branchCode) || a.academicYear - b.academicYear || a.name.localeCompare(b.name));
+  state.subjects = subjects.sort((a, b) =>
+    a.branchCode.localeCompare(b.branchCode) ||
+    a.academicYear - b.academicYear ||
+    a.name.localeCompare(b.name));
   state.papers = papers.sort((a, b) => String(b.year).localeCompare(String(a.year)));
   state.notes = notes.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
@@ -159,65 +198,96 @@ function switchView(view) {
     b.classList.toggle("active", b.dataset.view === view));
   document.querySelectorAll(".view").forEach((s) =>
     s.classList.toggle("active", s.id === "view-" + view));
-  ({ dashboard: renderDashboard, papers: renderPapers, subjects: renderSubjects, notes: renderNotes, data: renderData })[view]();
+  ({
+    dashboard: renderDashboard,
+    papers: renderPapers,
+    subjects: renderSubjects,
+    notes: renderNotes,
+    data: renderData,
+  })[view]();
 }
-
-const subjectOfPaper = (p) =>
-  state.subjects.find((s) => s.name === p.subjectName && s.branchCode === p.branchCode);
 
 const papersOfSubject = (branchCode, subjectName) =>
   state.papers.filter((p) => p.branchCode === branchCode && p.subjectName === subjectName);
 
 /* ============================================================
- * DASHBOARD
+ * HOME — three big actions, nothing else to think about
  * ============================================================ */
 async function renderDashboard() {
-  $("#viewTitle").textContent = "Dashboard";
-  $("#viewSubtitle").textContent = "Overview of your catalog";
+  $("#viewTitle").textContent = "Home";
+  $("#viewSubtitle").textContent = "Pick an action — the app updates as soon as you save";
   $("#topbarActions").innerHTML = "";
+
   const withFiles = state.papers.filter((p) => p.fileId).length;
-  const recent = state.papers.filter((p) => p.uploadedAt)
-    .sort((a, b) => b.uploadedAt - a.uploadedAt).slice(0, 5);
+  const recent = [
+    ...state.papers.filter((p) => p.uploadedAt).map((p) => ({
+      kind: "Paper", title: p.title, meta: `${p.branchCode} · ${p.subjectName} · ${p.year}`, at: p.uploadedAt, hasPdf: !!p.fileId,
+    })),
+    ...state.notes.filter((n) => n.updatedAt).map((n) => ({
+      kind: "Note", title: n.title, meta: `${n.branchCode} · ${yearLabel(n.academicYear)}`, at: n.updatedAt, hasPdf: !!n.storagePath,
+    })),
+  ].sort((a, b) => b.at - a.at).slice(0, 6);
 
   $("#view-dashboard").innerHTML = `
+    <div class="action-grid">
+      <button class="action-tile" id="tilePaper">
+        <div class="tile-ico">📄</div>
+        <h3>Upload paper</h3>
+        <p>Drop a PYQ PDF → branch, subject, year → save</p>
+      </button>
+      <button class="action-tile" id="tileNote">
+        <div class="tile-ico">📝</div>
+        <h3>Add note</h3>
+        <p>Study notes with optional PDF for students</p>
+      </button>
+      <button class="action-tile" id="tileSubject">
+        <div class="tile-ico">📚</div>
+        <h3>Add subject</h3>
+        <p>New subject under a branch &amp; year</p>
+      </button>
+    </div>
+
     <div class="cards">
       <div class="card"><div class="stat-num">${state.subjects.length}</div><div class="stat-label">Subjects</div></div>
       <div class="card"><div class="stat-num">${state.papers.length}</div><div class="stat-label">Question papers</div></div>
       <div class="card"><div class="stat-num">${state.notes.length}</div><div class="stat-label">Study notes</div></div>
-      <div class="card"><div class="stat-num">${withFiles}</div><div class="stat-label">PDFs attached</div></div>
+      <div class="card"><div class="stat-num">${withFiles}</div><div class="stat-label">PDFs live</div></div>
     </div>
+
     <div class="panel">
-      <h3>Cloud storage</h3>
-      <p class="muted" style="margin:0">☁ Connected to Supabase (Mumbai) · <b style="color:var(--text)">${withFiles} PDFs</b> in the <span class="mono">papers</span> bucket · students download straight from here.</p>
-    </div>
-    <div class="panel">
-      <h3>Recently uploaded PDFs</h3>
+      <h3>Recent activity <span class="panel-sub">newest first</span></h3>
       ${recent.length === 0
-        ? `<p class="muted" style="margin:0">Nothing uploaded yet — open <b>Papers → Upload paper</b> to add your first PDF.</p>`
-        : `<ul class="list-plain">${recent.map((p) =>
-            `<li><span><b>${esc(p.title)}</b><br><span class="muted">${esc(p.branchCode)} · ${esc(p.subjectName)} · ${esc(p.year)}</span></span><span class="badge green">PDF ✓</span></li>`).join("")}</ul>`}
+        ? `<p class="muted" style="margin:0">Nothing yet — start with <b>Upload paper</b> above.</p>`
+        : `<ul class="list-plain">${recent.map((r) => `
+            <li>
+              <span>
+                <b>${esc(r.title)}</b><br>
+                <span class="muted">${esc(r.kind)} · ${esc(r.meta)}</span>
+              </span>
+              <span class="badge ${r.hasPdf ? "green" : "grey"}">${r.hasPdf ? "PDF ✓" : "—"}</span>
+            </li>`).join("")}</ul>`}
     </div>`;
+
+  $("#tilePaper").addEventListener("click", () => openPaperModal(null));
+  $("#tileNote").addEventListener("click", () => openNoteModal(null));
+  $("#tileSubject").addEventListener("click", () => openSubjectModal(null));
 }
 
 /* ============================================================
- * PAPERS
+ * PAPERS — branch filter + search only; title auto-filled
  * ============================================================ */
 function renderPapers() {
-  $("#viewTitle").textContent = "Question Papers";
-  $("#viewSubtitle").textContent = "Upload and manage PDFs, branch → year → subject";
+  $("#viewTitle").textContent = "Papers";
+  $("#viewSubtitle").textContent = "Question papers students open from the app";
   $("#topbarActions").innerHTML = `<button class="btn" id="btnUpload">+ Upload paper</button>`;
   $("#btnUpload").addEventListener("click", () => openPaperModal(null));
 
   const f = state.paperFilter;
   const branchOpts = [`<option value="">All branches</option>`,
     ...BRANCHES.map((b) => `<option value="${b.code}" ${f.branch === b.code ? "selected" : ""}>${b.code} — ${esc(b.fullName)}</option>`)].join("");
-  const subjectPool = state.subjects.filter((s) => !f.branch || s.branchCode === f.branch);
-  const subjectOpts = [`<option value="">All subjects</option>`,
-    ...subjectPool.map((s) => `<option value="${esc(s.name)}" ${f.subject === s.name ? "selected" : ""}>${esc(s.name)} (${esc(s.branchCode)} · Y${esc(s.academicYear)})</option>`)].join("");
 
   const rows = state.papers.filter((p) => {
     if (f.branch && p.branchCode !== f.branch) return false;
-    if (f.subject && p.subjectName !== f.subject) return false;
     if (f.q && !(p.title + " " + p.subjectName + " " + p.year).toLowerCase().includes(f.q.toLowerCase())) return false;
     return true;
   });
@@ -226,17 +296,20 @@ function renderPapers() {
     <div class="panel">
       <div class="filters">
         <select id="fBranch">${branchOpts}</select>
-        <select id="fSubject">${subjectOpts}</select>
-        <input id="fQ" type="search" placeholder="Search title / year..." value="${esc(f.q)}" />
+        <input id="fQ" type="search" placeholder="Search title, subject, year…" value="${esc(f.q)}" />
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Title</th><th>Branch</th><th>Subject</th><th>Exam year</th><th>PDF</th><th></th></tr></thead>
+        <thead><tr><th>Paper</th><th>Branch</th><th>Year</th><th>PDF</th><th></th></tr></thead>
         <tbody>
-          ${rows.length === 0 ? `<tr><td colspan="6" class="empty">No papers match. Adjust filters or upload one.</td></tr>` : rows.map((p) => `
+          ${rows.length === 0
+            ? `<tr><td colspan="5" class="empty"><strong>No papers match</strong>Adjust filters or hit Upload paper.</td></tr>`
+            : rows.map((p) => `
           <tr>
-            <td><b>${esc(p.title)}</b><br><span class="muted">${esc(p.examType || "")} · ${esc(p.duration || "")} · ${p.maxMarks || ""} marks</span></td>
+            <td>
+              <b>${esc(p.title)}</b><br>
+              <span class="muted">${esc(p.subjectName)}${p.examType ? " · " + esc(p.examType) : ""}</span>
+            </td>
             <td><span class="badge">${esc(p.branchCode)}</span></td>
-            <td>${esc(p.subjectName)}</td>
             <td>${esc(p.year)}</td>
             <td>${p.fileId
               ? `<span class="badge green">PDF ✓ ${esc(p.fileSize || "")}</span>`
@@ -244,20 +317,19 @@ function renderPapers() {
             <td><div class="row-actions">
               ${p.fileId ? `<button class="icon-btn" data-act="view" data-id="${esc(p.id)}" title="Open PDF">⤴</button>` : ""}
               <button class="icon-btn" data-act="edit" data-id="${esc(p.id)}" title="Edit">✎</button>
-              <button class="icon-btn" data-act="del" data-id="${esc(p.id)}" title="Delete">🗑</button>
+              <button class="icon-btn danger" data-act="del" data-id="${esc(p.id)}" title="Delete">🗑</button>
             </div></td>
           </tr>`).join("")}
         </tbody>
       </table></div>
-      <p class="muted" style="margin:12px 0 0">${rows.length} paper(s) shown</p>
+      <p class="muted" style="margin:12px 0 0">${rows.length} paper(s)</p>
     </div>`;
 
-  $("#fBranch").addEventListener("change", (e) => { state.paperFilter.branch = e.target.value; state.paperFilter.subject = ""; renderPapers(); });
-  $("#fSubject").addEventListener("change", (e) => { state.paperFilter.subject = e.target.value; renderPapers(); });
+  $("#fBranch").addEventListener("change", (e) => { state.paperFilter.branch = e.target.value; renderPapers(); });
   $("#fQ").addEventListener("input", (e) => {
     state.paperFilter.q = e.target.value;
     clearTimeout(window.__pq);
-    window.__pq = setTimeout(renderPapers, 250);
+    window.__pq = setTimeout(renderPapers, 200);
   });
   $("#view-papers").querySelectorAll("button[data-act]").forEach((b) => {
     const id = b.dataset.id;
@@ -268,43 +340,70 @@ function renderPapers() {
 }
 
 function subjectSelectOptions(branchCode, selectedName) {
-  return state.subjects
-    .filter((s) => s.branchCode === branchCode)
-    .map((s) => `<option value="${esc(s.name)}" ${s.name === selectedName ? "selected" : ""}>${esc(s.name)} (Y${s.academicYear})</option>`)
-    .join("");
+  const pool = state.subjects.filter((s) => s.branchCode === branchCode);
+  if (pool.length === 0) {
+    return `<option value="">— add a subject first —</option>`;
+  }
+  return pool.map((s) =>
+    `<option value="${esc(s.name)}" ${s.name === selectedName ? "selected" : ""}>${esc(s.name)} (Y${s.academicYear})</option>`
+  ).join("");
 }
 
 function openPaperModal(existing) {
+  const prefs = loadPrefs();
   const p = existing || {
-    branchCode: "ENTC", subjectName: "", title: "End Semester Examination 2025",
-    examType: "End Semester Examination", year: String(new Date().getFullYear()),
-    duration: "3 Hours", maxMarks: 100, fileFormat: "PDF", fileSize: "", sampleQuestions: [],
+    branchCode: prefs.branch || "ENTC",
+    subjectName: "",
+    title: "",
+    examType: "End Semester Examination",
+    year: String(new Date().getFullYear()),
+    duration: "3 Hours",
+    maxMarks: 100,
+    fileFormat: "PDF",
+    fileSize: "",
+    sampleQuestions: [],
   };
   state.pendingFile = null;
+
   openModal(existing ? "Edit paper" : "Upload paper", `
-    <div class="field-row">
-      <div class="field"><label>Branch</label>
-        <select id="mBranch">${BRANCHES.map((b) => `<option ${b.code === p.branchCode ? "selected" : ""}>${b.code}</option>`).join("")}</select>
-      </div>
-      <div class="field"><label>Subject</label><select id="mSubject"></select></div>
+    <div class="field"><label>Branch</label>
+      <select id="mBranch">${BRANCHES.map((b) =>
+        `<option value="${b.code}" ${b.code === p.branchCode ? "selected" : ""}>${b.code} — ${esc(b.fullName)}</option>`).join("")}</select>
     </div>
-    <div class="field"><label>Paper title</label><input id="mTitle" value="${esc(p.title)}" /></div>
+    <div class="field"><label>Subject</label><select id="mSubject"></select></div>
     <div class="field-row">
-      <div class="field"><label>Exam type</label><input id="mExamType" value="${esc(p.examType || "")}" /></div>
       <div class="field"><label>Exam year</label><input id="mYear" value="${esc(p.year)}" /></div>
+      <div class="field"><label>Exam type</label>
+        <select id="mExamType">
+          ${["End Semester Examination", "Mid Semester Examination", "Unit Test", "Other"].map((t) =>
+            `<option ${t === (p.examType || "End Semester Examination") ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+      </div>
     </div>
-    <div class="field-row">
-      <div class="field"><label>Duration</label><input id="mDuration" value="${esc(p.duration || "3 Hours")}" /></div>
-      <div class="field"><label>Max marks</label><input id="mMarks" type="number" value="${p.maxMarks || 100}" /></div>
+    <div class="field"><label>Paper title <span class="muted">(optional — auto if empty)</span></label>
+      <input id="mTitle" value="${esc(p.title)}" placeholder="auto: subject + exam type + year" />
     </div>
-    <div class="field"><label>Sample questions (one per line, optional)</label>
-      <textarea id="mSamples" rows="4">${esc((p.sampleQuestions || []).join("\n"))}</textarea>
+
+    <button type="button" class="adv-toggle" id="advToggle">▸ More options (duration, marks…)</button>
+    <div class="adv-fields" id="advFields" hidden>
+      <div class="field-row">
+        <div class="field"><label>Duration</label><input id="mDuration" value="${esc(p.duration || "3 Hours")}" /></div>
+        <div class="field"><label>Max marks</label><input id="mMarks" type="number" value="${p.maxMarks || 100}" /></div>
+      </div>
+      <div class="field"><label>Sample questions (one per line)</label>
+        <textarea id="mSamples" rows="3">${esc((p.sampleQuestions || []).join("\n"))}</textarea>
+      </div>
     </div>
+
     <div class="field"><label>PDF file</label>
-      <div class="dropzone" id="mDrop">Drop a PDF here or <strong>browse</strong>
+      <div class="dropzone" id="mDrop">
+        <strong>Drop PDF or browse</strong>
+        <span class="dz-hint">Students download this from the app</span>
         <input type="file" id="mFile" accept="application/pdf" hidden />
       </div>
-      <div id="mFileInfo">${p.fileName ? `<div class="file-chip">📄 ${esc(p.fileName)} · ${esc(p.fileSize || "")} (already attached — choose a new file to replace)</div>` : `<p class="hint">No PDF attached yet. You can save metadata first and attach later.</p>`}</div>
+      <div id="mFileInfo">${p.fileName
+        ? `<div class="file-chip">📄 ${esc(p.fileName)} · ${esc(p.fileSize || "")} — attached (drop a new file to replace)</div>`
+        : `<p class="hint">Required for students to open the paper.</p>`}</div>
     </div>
   `, [
     { label: "Cancel", kind: "secondary" },
@@ -312,50 +411,74 @@ function openPaperModal(existing) {
   ]);
 
   const branchSel = $("#mBranch"), subjectSel = $("#mSubject");
-  const refreshSubjects = () => { subjectSel.innerHTML = subjectSelectOptions(branchSel.value, p.subjectName || undefined); };
-  branchSel.addEventListener("change", () => { p.subjectName = ""; refreshSubjects(); });
+  const refreshSubjects = () => {
+    subjectSel.innerHTML = subjectSelectOptions(branchSel.value, p.subjectName || undefined);
+  };
+  branchSel.addEventListener("change", () => {
+    p.subjectName = "";
+    refreshSubjects();
+    savePrefs({ branch: branchSel.value });
+  });
   refreshSubjects();
+  savePrefs({ branch: p.branchCode });
 
-  const drop = $("#mDrop"), fileInput = $("#mFile");
-  drop.addEventListener("click", () => fileInput.click());
-  ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
-  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) pickFile(e.dataTransfer.files[0]); });
-  fileInput.addEventListener("change", () => { if (fileInput.files.length) pickFile(fileInput.files[0]); });
+  // Advanced toggle
+  const advBtn = $("#advToggle"), advFields = $("#advFields");
+  advBtn.addEventListener("click", () => {
+    const open = advFields.hidden;
+    advFields.hidden = !open;
+    advBtn.textContent = (open ? "▾" : "▸") + (open ? " Hide options" : " More options (duration, marks…)");
+  });
 
-  function pickFile(file) {
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      toast("Please choose a PDF file", "err"); return;
-    }
+  wireDropzone("mDrop", "mFile", "mFileInfo", (file) => {
+    if (!acceptPdf(file)) return;
     state.pendingFile = file;
-    $("#mFileInfo").innerHTML = `<div class="file-chip">📄 ${esc(file.name)} · ${fmtBytes(file.size)} (will attach on save)</div>`;
-  }
+    $("#mFileInfo").innerHTML = `<div class="file-chip">📄 ${esc(file.name)} · ${fmtBytes(file.size)} — ready to upload</div>`;
+    // Suggest title from filename if empty
+    const titleInput = $("#mTitle");
+    if (!titleInput.value) {
+      const base = file.name.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
+      if (base && base.length < 80) titleInput.placeholder = base;
+    }
+  });
 }
 
 async function savePaper(existing) {
   const branchCode = $("#mBranch").value;
   const subjectName = $("#mSubject").value;
-  const title = $("#mTitle").value.trim();
   const year = $("#mYear").value.trim();
-  if (!subjectName) { toast("Pick a subject first", "err"); return; }
-  if (!title || !year) { toast("Title and exam year are required", "err"); return; }
+  const examType = $("#mExamType").value;
+  let title = $("#mTitle").value.trim();
+
+  if (!subjectName) { toast("Pick a subject (add one from Subjects if missing)", "err"); return; }
+  if (!year) { toast("Exam year is required", "err"); return; }
+  if (!title) {
+    title = `${subjectName} — ${examType} ${year}`;
+  }
 
   let id = existing ? existing.id
     : (slug(branchCode + "_" + subjectName) + "_" + slug(year));
   if (!existing) {
     let n = 2;
-    while (state.papers.some((p) => p.id === id)) id = slug(branchCode + "_" + subjectName) + "_" + slug(year) + "_" + (n++);
+    while (state.papers.some((p) => p.id === id)) {
+      id = slug(branchCode + "_" + subjectName) + "_" + slug(year) + "_" + (n++);
+    }
   }
-  const samples = $("#mSamples").value.split("\n").map((s) => s.trim()).filter(Boolean);
+
+  const advOpen = $("#advFields") && !$("#advFields").hidden;
+  const samples = advOpen
+    ? ($("#mSamples").value || "").split("\n").map((s) => s.trim()).filter(Boolean)
+    : (existing ? existing.sampleQuestions || [] : []);
+
   const paper = {
     id,
     title,
     subjectName,
     branchCode,
     year,
-    examType: $("#mExamType").value.trim(),
-    duration: $("#mDuration").value.trim(),
-    maxMarks: parseInt($("#mMarks").value, 10) || 100,
+    examType,
+    duration: advOpen ? $("#mDuration").value.trim() : (existing?.duration || "3 Hours"),
+    maxMarks: advOpen ? (parseInt($("#mMarks").value, 10) || 100) : (existing?.maxMarks || 100),
     fileFormat: "PDF",
     fileSize: existing ? (existing.fileSize || "") : "",
     sampleQuestions: samples,
@@ -363,6 +486,7 @@ async function savePaper(existing) {
     fileName: existing ? (existing.fileName || null) : null,
     uploadedAt: existing ? (existing.uploadedAt || null) : null,
   };
+
   if (state.pendingFile) {
     const f = state.pendingFile;
     const filePath = id + ".pdf";
@@ -375,15 +499,17 @@ async function savePaper(existing) {
     paper.fileSize = fmtBytes(f.size);
     paper.uploadedAt = Date.now();
   }
+
   await DB.put("papers", paper);
-  toast(existing ? "Paper updated" : "Paper saved", "ok");
+  savePrefs({ branch: branchCode });
+  toast(existing ? "Paper updated" : "Paper published", "ok");
   await reloadAll();
   renderPapers();
 }
 
 async function deletePaper(id) {
   const p = state.papers.find((x) => x.id === id);
-  confirmDialog("Delete paper?", `"${p.title}" (${p.branchCode} · ${p.subjectName} · ${p.year}) will be removed. This cannot be undone.`, "Delete", async () => {
+  confirmDialog("Delete paper?", `"${p.title}" (${p.branchCode} · ${p.subjectName}) will be removed from the app.`, "Delete", async () => {
     await DB.del("papers", id);
     if (p.fileId) await DB.delFile(p.fileId);
     toast("Paper deleted", "ok");
@@ -403,7 +529,7 @@ async function openPdf(id) {
  * ============================================================ */
 function renderSubjects() {
   $("#viewTitle").textContent = "Subjects";
-  $("#viewSubtitle").textContent = "Branch → year → subjects (mirrors the app)";
+  $("#viewSubtitle").textContent = "What students see under each branch & year";
   $("#topbarActions").innerHTML = `<button class="btn" id="btnAddSub">+ Add subject</button>`;
   $("#btnAddSub").addEventListener("click", () => openSubjectModal(null));
 
@@ -414,7 +540,10 @@ function renderSubjects() {
   $("#view-subjects").innerHTML = `
     <div class="panel">
       <div class="filters">
-        <select id="sBranch">${BRANCHES.map((b) => `<option value="${b.code}" ${f.branch === b.code ? "selected" : ""}>${b.code}</option>`).join("")}</select>
+        <select id="sBranch">
+          <option value="">All branches</option>
+          ${BRANCHES.map((b) => `<option value="${b.code}" ${f.branch === b.code ? "selected" : ""}>${b.code}</option>`).join("")}
+        </select>
         <select id="sYear">
           <option value="">All years</option>
           ${YEARS.map((y) => `<option value="${y.year}" ${String(f.year) === String(y.year) ? "selected" : ""}>${y.label}</option>`).join("")}
@@ -423,19 +552,21 @@ function renderSubjects() {
       <div class="table-wrap"><table>
         <thead><tr><th>Subject</th><th>Branch</th><th>Year</th><th>Papers</th><th></th></tr></thead>
         <tbody>
-          ${rows.length === 0 ? `<tr><td colspan="5" class="empty">No subjects here yet — add one.</td></tr>` : rows.map((s) => {
-            const n = papersOfSubject(s.branchCode, s.name).length;
-            return `<tr>
-              <td><b>${esc(s.name)}</b></td>
-              <td><span class="badge">${esc(s.branchCode)}</span></td>
-              <td>${yearLabel(s.academicYear)}</td>
-              <td>${n}</td>
-              <td><div class="row-actions">
-                <button class="icon-btn" data-act="edit" data-id="${esc(s.id)}" title="Edit">✎</button>
-                <button class="icon-btn" data-act="del" data-id="${esc(s.id)}" title="Delete">🗑</button>
-              </div></td>
-            </tr>`;
-          }).join("")}
+          ${rows.length === 0
+            ? `<tr><td colspan="5" class="empty"><strong>No subjects here</strong>Add one to start publishing papers.</td></tr>`
+            : rows.map((s) => {
+              const n = papersOfSubject(s.branchCode, s.name).length;
+              return `<tr>
+                <td><b>${esc(s.name)}</b></td>
+                <td><span class="badge">${esc(s.branchCode)}</span></td>
+                <td>${yearLabel(s.academicYear)}</td>
+                <td>${n}</td>
+                <td><div class="row-actions">
+                  <button class="icon-btn" data-act="edit" data-id="${esc(s.id)}" title="Edit">✎</button>
+                  <button class="icon-btn danger" data-act="del" data-id="${esc(s.id)}" title="Delete">🗑</button>
+                </div></td>
+              </tr>`;
+            }).join("")}
         </tbody>
       </table></div>
     </div>`;
@@ -450,50 +581,70 @@ function renderSubjects() {
 }
 
 function openSubjectModal(existing) {
-  const s = existing || { branchCode: "ENTC", academicYear: 2, name: "", paperCount: 2, iconName: "graphic_eq" };
+  const prefs = loadPrefs();
+  const s = existing || {
+    branchCode: prefs.branch || "ENTC",
+    academicYear: 2,
+    name: "",
+    paperCount: 2,
+    iconName: "graphic_eq",
+  };
   const icons = ["graphic_eq", "memory", "cell_tower", "smart_toy", "computer", "language"];
+
   openModal(existing ? "Edit subject" : "Add subject", `
+    <div class="field"><label>Subject name</label>
+      <input id="sName" value="${esc(s.name)}" placeholder="e.g. Data Structures & Algorithms" />
+    </div>
     <div class="field-row">
       <div class="field"><label>Branch</label>
-        <select id="sBranchM">${BRANCHES.map((b) => `<option ${b.code === s.branchCode ? "selected" : ""}>${b.code}</option>`).join("")}</select>
+        <select id="sBranchM">${BRANCHES.map((b) =>
+          `<option value="${b.code}" ${b.code === s.branchCode ? "selected" : ""}>${b.code}</option>`).join("")}</select>
       </div>
       <div class="field"><label>Year</label>
-        <select id="sYearM">${YEARS.map((y) => `<option value="${y.year}" ${s.academicYear === y.year ? "selected" : ""}>${y.label}</option>`).join("")}</select>
+        <select id="sYearM">${YEARS.map((y) =>
+          `<option value="${y.year}" ${s.academicYear === y.year ? "selected" : ""}>${y.label}</option>`).join("")}</select>
       </div>
     </div>
-    <div class="field"><label>Subject name</label><input id="sName" value="${esc(s.name)}" placeholder="e.g. Data Structures & Algorithms" /></div>
     <div class="field-row">
-      <div class="field"><label>Shown paper count</label><input id="sCount" type="number" min="0" value="${s.paperCount}" /><p class="hint">Display number shown in the app (can exceed uploaded files).</p></div>
+      <div class="field"><label>Shown paper count</label>
+        <input id="sCount" type="number" min="0" value="${s.paperCount}" />
+        <p class="hint">Display number in the app (can exceed files uploaded).</p>
+      </div>
       <div class="field"><label>Icon</label>
-        <select id="sIcon">${icons.map((i) => `<option ${i === s.iconName ? "selected" : ""}>${i}</option>`).join("")}</select>
+        <select id="sIcon">${icons.map((i) =>
+          `<option ${i === s.iconName ? "selected" : ""}>${i}</option>`).join("")}</select>
       </div>
     </div>
   `, [
     { label: "Cancel", kind: "secondary" },
     { label: existing ? "Save changes" : "Add subject", onClick: async () => {
-        const name = $("#sName").value.trim();
-        if (!name) { toast("Subject name is required", "err"); return; }
-        const branchCode = $("#sBranchM").value;
-        const academicYear = Number($("#sYearM").value);
-        const dupe = state.subjects.find((x) => x.name.toLowerCase() === name.toLowerCase() && x.branchCode === branchCode && (!existing || x.id !== existing.id));
-        if (dupe) { toast("This subject already exists for " + branchCode, "err"); return; }
-        const id = existing ? existing.id : (slug(branchCode + "_" + name));
-        await DB.put("subjects", {
-          id, name, branchCode, academicYear,
-          paperCount: parseInt($("#sCount").value, 10) || 0,
-          iconName: $("#sIcon").value,
-        });
-        toast(existing ? "Subject updated" : "Subject added", "ok");
-        await reloadAll();
-        renderSubjects();
-      } },
+      const name = $("#sName").value.trim();
+      if (!name) { toast("Subject name is required", "err"); return; }
+      const branchCode = $("#sBranchM").value;
+      const academicYear = Number($("#sYearM").value);
+      const dupe = state.subjects.find((x) =>
+        x.name.toLowerCase() === name.toLowerCase() &&
+        x.branchCode === branchCode &&
+        (!existing || x.id !== existing.id));
+      if (dupe) { toast("This subject already exists for " + branchCode, "err"); return; }
+      const id = existing ? existing.id : slug(branchCode + "_" + name);
+      await DB.put("subjects", {
+        id, name, branchCode, academicYear,
+        paperCount: parseInt($("#sCount").value, 10) || 0,
+        iconName: $("#sIcon").value,
+      });
+      savePrefs({ branch: branchCode });
+      toast(existing ? "Subject updated" : "Subject added", "ok");
+      await reloadAll();
+      renderSubjects();
+    } },
   ]);
 }
 
 function deleteSubject(s) {
   const n = papersOfSubject(s.branchCode, s.name).length;
   if (n > 0) {
-    toast(`Cannot delete — ${n} paper(s) still use this subject. Delete them first.`, "err");
+    toast(`Cannot delete — ${n} paper(s) still use this subject.`, "err");
     return;
   }
   confirmDialog("Delete subject?", `"${s.name}" (${s.branchCode}) will be removed.`, "Delete", async () => {
@@ -508,8 +659,8 @@ function deleteSubject(s) {
  * NOTES
  * ============================================================ */
 function renderNotes() {
-  $("#viewTitle").textContent = "Study Notes";
-  $("#viewSubtitle").textContent = "Admin-published notes, branch → year";
+  $("#viewTitle").textContent = "Notes";
+  $("#viewSubtitle").textContent = "Study notes students open from Home → First Year";
   $("#topbarActions").innerHTML = `<button class="btn" id="btnAddNote">+ Add note</button>`;
   $("#btnAddNote").addEventListener("click", () => openNoteModal(null));
 
@@ -525,20 +676,24 @@ function renderNotes() {
         </select>
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Title</th><th>Branch</th><th>Year</th><th>Subject</th><th>PDF</th><th>Updated</th><th></th></tr></thead>
+        <thead><tr><th>Note</th><th>Branch</th><th>Year</th><th>PDF</th><th>Updated</th><th></th></tr></thead>
         <tbody>
-          ${rows.length === 0 ? `<tr><td colspan="7" class="empty">No notes yet — add one.</td></tr>` : rows.map((n) => `
+          ${rows.length === 0
+            ? `<tr><td colspan="6" class="empty"><strong>No notes yet</strong>Add one so students have something to revise.</td></tr>`
+            : rows.map((n) => `
           <tr>
-            <td><b>${esc(n.title)}</b><br><span class="muted">${esc((n.content || "").slice(0, 80))}${(n.content || "").length > 80 ? "…" : ""}</span></td>
+            <td>
+              <b>${esc(n.title)}</b>
+              ${n.content ? `<br><span class="muted">${esc(n.content.slice(0, 80))}${n.content.length > 80 ? "…" : ""}</span>` : ""}
+            </td>
             <td><span class="badge">${esc(n.branchCode)}</span></td>
             <td>${yearLabel(n.academicYear)}</td>
-            <td>${esc(n.subjectName || "—")}</td>
-            <td>${n.storagePath ? `<span class="badge green">PDF ✓</span>` : `<span class="muted">—</span>`}</td>
+            <td>${n.storagePath ? `<span class="badge green">PDF ✓</span>` : `<span class="badge grey">—</span>`}</td>
             <td>${fmtDate(n.updatedAt)}</td>
             <td><div class="row-actions">
               ${n.storagePath ? `<button class="icon-btn" data-act="open" data-id="${n.id}" title="Open PDF">📄</button>` : ""}
               <button class="icon-btn" data-act="edit" data-id="${n.id}" title="Edit">✎</button>
-              <button class="icon-btn" data-act="del" data-id="${n.id}" title="Delete">🗑</button>
+              <button class="icon-btn danger" data-act="del" data-id="${n.id}" title="Delete">🗑</button>
             </div></td>
           </tr>`).join("")}
         </tbody>
@@ -552,12 +707,12 @@ function renderNotes() {
     if (b.dataset.act === "edit") b.addEventListener("click", () => openNoteModal(note));
     if (b.dataset.act === "open") b.addEventListener("click", () => {
       if (note.storagePath) window.open(DB.fileUrl(note.storagePath), "_blank");
-      else toast("No PDF attached to this note yet", "err");
+      else toast("No PDF on this note", "err");
     });
     if (b.dataset.act === "del") b.addEventListener("click", () => {
       confirmDialog("Delete note?", `"${note.title}" will be removed.`, "Delete", async () => {
         await DB.del("notes", id);
-        if (note.storagePath) { try { await DB.delFile(note.storagePath); } catch { /* already gone */ } }
+        if (note.storagePath) { try { await DB.delFile(note.storagePath); } catch { /* gone */ } }
         toast("Note deleted", "ok");
         await reloadAll();
         renderNotes();
@@ -567,65 +722,77 @@ function renderNotes() {
 }
 
 function openNoteModal(existing) {
-  const n = existing || { title: "", content: "", subjectName: "", branchCode: "COMMON", academicYear: 1, storagePath: "" };
+  const prefs = loadPrefs();
+  const n = existing || {
+    title: "", content: "", subjectName: "",
+    branchCode: prefs.branch || "COMMON",
+    academicYear: 1,
+    storagePath: "",
+  };
   state.pendingFile = null;
+
   openModal(existing ? "Edit note" : "Add note", `
-    <div class="field"><label>Title</label><input id="nTitle" value="${esc(n.title)}" /></div>
+    <div class="field"><label>Title</label>
+      <input id="nTitle" value="${esc(n.title)}" placeholder="e.g. Maths I — Important Formulas" />
+    </div>
     <div class="field-row">
       <div class="field"><label>Branch</label>
-        <select id="nBranchM">${BRANCHES.map((b) => `<option value="${b.code}" ${b.code === n.branchCode ? "selected" : ""}>${b.code}</option>`).join("")}</select>
+        <select id="nBranchM">${BRANCHES.map((b) =>
+          `<option value="${b.code}" ${b.code === n.branchCode ? "selected" : ""}>${b.code}</option>`).join("")}</select>
       </div>
       <div class="field"><label>Year</label>
-        <select id="nYearM">${YEARS.map((y) => `<option value="${y.year}" ${n.academicYear === y.year ? "selected" : ""}>${y.label}</option>`).join("")}</select>
+        <select id="nYearM">${YEARS.map((y) =>
+          `<option value="${y.year}" ${n.academicYear === y.year ? "selected" : ""}>${y.label}</option>`).join("")}</select>
+        <p class="hint" id="yearHint">First Year is COMMON for all branches.</p>
       </div>
     </div>
-    <div class="field"><label>Subject (optional)</label><input id="nSubject" value="${esc(n.subjectName || "")}" placeholder="e.g. Signals and Systems" /></div>
-    <div class="field"><label>Description (optional — list subtitle)</label>
-      <textarea id="nContent" rows="3" placeholder="One-line summary shown under the title in the app">${esc(n.content || "")}</textarea>
+    <div class="field"><label>Subject <span class="muted">(optional)</span></label>
+      <input id="nSubject" value="${esc(n.subjectName || "")}" placeholder="e.g. Signals and Systems" />
+    </div>
+    <div class="field"><label>Short description <span class="muted">(shown under title in app)</span></label>
+      <textarea id="nContent" rows="2" placeholder="One line is enough">${esc(n.content || "")}</textarea>
     </div>
     <div class="field"><label>Note PDF</label>
-      <div class="dropzone" id="nDrop">Drop a PDF here or <strong>browse</strong>
+      <div class="dropzone" id="nDrop">
+        <strong>Drop PDF or browse</strong>
+        <span class="dz-hint">Opens when the student taps the note</span>
         <input type="file" id="nFile" accept="application/pdf" hidden />
       </div>
-      <div id="nFileInfo">${n.storagePath ? `<div class="file-chip">📄 ${esc(n.fileName || n.storagePath.split("/").pop())} (already attached — choose a new file to replace)</div>` : `<p class="hint">No PDF attached yet. The app opens this file when the note is tapped.</p>`}</div>
+      <div id="nFileInfo">${n.storagePath
+        ? `<div class="file-chip">📄 ${esc(n.fileName || n.storagePath.split("/").pop())} — attached</div>`
+        : `<p class="hint">Optional — without a PDF the note is text-only.</p>`}</div>
     </div>
   `, [
     { label: "Cancel", kind: "secondary" },
     { label: existing ? "Save changes" : "Add note", onClick: () => saveNote(existing) },
   ]);
 
-  const branchSel = $("#nBranchM"), yearSel = $("#nYearM");
+  const branchSel = $("#nBranchM"), yearSel = $("#nYearM"), yearHint = $("#yearHint");
   const syncYear = () => {
     if (branchSel.value === "COMMON") {
       yearSel.value = "1";
       yearSel.disabled = true;
+      yearHint.textContent = "First Year is COMMON for all branches.";
+      yearHint.style.display = "";
     } else {
       yearSel.disabled = false;
-      if (yearSel.value === "1" && branchSel.value !== "COMMON") yearSel.value = "2";
+      if (yearSel.value === "1") yearSel.value = "2";
+      yearHint.style.display = "none";
     }
   };
-  branchSel.addEventListener("change", syncYear);
+  branchSel.addEventListener("change", () => { syncYear(); savePrefs({ branch: branchSel.value }); });
   syncYear();
 
-  const drop = $("#nDrop"), fileInput = $("#nFile");
-  drop.addEventListener("click", () => fileInput.click());
-  ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
-  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-  drop.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) pickNoteFile(e.dataTransfer.files[0]); });
-  fileInput.addEventListener("change", () => { if (fileInput.files.length) pickNoteFile(fileInput.files[0]); });
-
-  function pickNoteFile(file) {
-    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      toast("Please choose a PDF file", "err"); return;
-    }
+  wireDropzone("nDrop", "nFile", "nFileInfo", (file) => {
+    if (!acceptPdf(file)) return;
     state.pendingFile = file;
-    $("#nFileInfo").innerHTML = `<div class="file-chip">📄 ${esc(file.name)} · ${fmtBytes(file.size)} (will attach on save)</div>`;
-  }
+    $("#nFileInfo").innerHTML = `<div class="file-chip">📄 ${esc(file.name)} · ${fmtBytes(file.size)} — ready</div>`;
+  });
 }
 
 async function saveNote(existing) {
   const title = $("#nTitle").value.trim();
-  const content = $("#nContent").value.trim(); // optional description only
+  const content = $("#nContent").value.trim();
   if (!title) { toast("Title is required", "err"); return; }
   const branchCode = $("#nBranchM").value;
   const academicYear = branchCode === "COMMON" ? 1 : Number($("#nYearM").value);
@@ -645,10 +812,9 @@ async function saveNote(existing) {
 
   if (state.pendingFile) {
     const f = state.pendingFile;
-    const basePath = "notes/";
-    const filePath = basePath + slug(title) + "_" + Date.now() + ".pdf";
+    const filePath = "notes/" + slug(title) + "_" + Date.now() + ".pdf";
     if (existing && existing.storagePath && existing.storagePath !== filePath) {
-      try { await DB.delFile(existing.storagePath); } catch { /* already gone */ }
+      try { await DB.delFile(existing.storagePath); } catch { /* gone */ }
     }
     await DB.putFile(filePath, f);
     row.storagePath = filePath;
@@ -657,33 +823,34 @@ async function saveNote(existing) {
   }
 
   await DB.put("notes", row);
-  toast(existing ? "Note updated" : "Note added", "ok");
+  savePrefs({ branch: branchCode });
+  toast(existing ? "Note updated" : "Note published", "ok");
   await reloadAll();
   renderNotes();
 }
 
 /* ============================================================
- * BACKUP & SYNC
+ * SETTINGS (backup / advanced — not part of daily flow)
  * ============================================================ */
 function renderData() {
-  $("#viewTitle").textContent = "Backup & Sync";
-  $("#viewSubtitle").textContent = "Move this catalog to the backend when ready";
+  $("#viewTitle").textContent = "Settings";
+  $("#viewSubtitle").textContent = "Backup, import, and rare tools";
   $("#topbarActions").innerHTML = "";
   $("#view-data").innerHTML = `
     <div class="panel">
-      <h3>Export catalog (JSON)</h3>
-      <p class="muted">Downloads <span class="mono">subjects + papers + notes</span> with the exact field names the Supabase tables use. PDF bytes are <b>not</b> inside (they stay in Supabase Storage) — papers carry a <span class="mono">hasFile</span> flag so you know which to re-upload after an import.</p>
-      <button class="btn" id="btnExport">⇅ Export JSON</button>
+      <h3>Export backup</h3>
+      <p class="muted">Downloads subjects, papers and notes as JSON. PDFs stay in cloud storage — re-attach after a restore.</p>
+      <button class="btn tonal" id="btnExport">Download JSON</button>
     </div>
     <div class="panel">
-      <h3>Import catalog (JSON)</h3>
-      <p class="muted">Replaces subjects, papers and notes with a previously exported file. Attached PDFs are dropped on import (re-attach afterwards).</p>
+      <h3>Import backup</h3>
+      <p class="muted">Replaces the current catalog with a previously exported file.</p>
       <input type="file" id="importFile" accept="application/json" hidden />
-      <button class="btn secondary" id="btnImport">Choose backup file…</button>
+      <button class="btn secondary" id="btnImport">Choose file…</button>
     </div>
     <div class="panel">
-      <h3>Backend field map</h3>
-      <p class="muted">Create these Supabase tables later — names and fields already match:</p>
+      <h3>Database fields</h3>
+      <p class="muted">Supabase tables (already live):</p>
       <div class="codebox">subjects(id, name, branchCode, academicYear, paperCount, iconName)
 papers(id, title, subjectName, branchCode, year, examType,
        fileFormat, fileSize, duration, maxMarks,
@@ -692,8 +859,8 @@ notes(id, title, content, subjectName, branchCode,
       academicYear, fileUrl, storagePath, updatedAt)</div>
     </div>
     <div class="panel">
-      <h3 style="color:var(--danger)">Danger zone</h3>
-      <p class="muted">Erase ALL subjects, papers and notes from the cloud database. Uploaded PDFs stay in Storage — delete them from each paper first if needed.</p>
+      <h3 style="color:var(--error)">Danger zone</h3>
+      <p class="muted">Erase all subjects, papers and notes from the cloud. Uploaded PDFs remain until deleted per-item.</p>
       <button class="btn danger" id="btnReset">Erase cloud data</button>
     </div>`;
 
@@ -703,7 +870,7 @@ notes(id, title, content, subjectName, branchCode,
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     const d = new Date();
-    a.download = `pyq-hub-backup-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
+    a.download = `paperadda-backup-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     toast("Backup downloaded", "ok");
@@ -713,23 +880,27 @@ notes(id, title, content, subjectName, branchCode,
     if (!e.target.files.length) return;
     try {
       const data = JSON.parse(await e.target.files[0].text());
-      confirmDialog("Import backup?", `This REPLACES all ${state.subjects.length} subjects, ${state.papers.length} papers and ${state.notes.length} notes currently here.`, "Import", async () => {
-        await DB.importJSON(data);
-        toast("Backup imported", "ok");
-        await reloadAll();
-        switchView("dashboard");
-      });
+      confirmDialog("Import backup?",
+        `This REPLACES ${state.subjects.length} subjects, ${state.papers.length} papers and ${state.notes.length} notes.`,
+        "Import", async () => {
+          await DB.importJSON(data);
+          toast("Backup imported", "ok");
+          await reloadAll();
+          switchView("dashboard");
+        });
     } catch (err) {
       toast("Could not read that file: " + err.message, "err");
     }
     e.target.value = "";
   });
   $("#btnReset").addEventListener("click", () => {
-    confirmDialog("Erase everything?", "All subjects, papers and notes will be deleted from Supabase. This cannot be undone.", "Erase", async () => {
-      await DB.resetToSeed();
-      toast("Cloud data erased", "ok");
-      await reloadAll();
-      switchView("dashboard");
-    });
+    confirmDialog("Erase everything?",
+      "All subjects, papers and notes will be deleted from Supabase. This cannot be undone.",
+      "Erase", async () => {
+        await DB.resetToSeed();
+        toast("Cloud data erased", "ok");
+        await reloadAll();
+        switchView("dashboard");
+      });
   });
 }
