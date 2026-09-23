@@ -103,15 +103,6 @@ fun YearSelectionScreen(
                     .padding(top = 4.dp)
             )
 
-            Text(
-                text = "First Year is common to all branches — open it from Home.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 2.dp)
-            )
-
             Spacer(modifier = Modifier.height(20.dp))
 
             // Years 2–4 only: first year lives on the dedicated Home card.

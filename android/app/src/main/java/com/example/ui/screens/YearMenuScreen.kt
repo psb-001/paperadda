@@ -18,13 +18,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.AcademicYear
 import com.example.data.model.branchDisplayName
 import com.example.ui.MainViewModel
@@ -48,17 +46,6 @@ fun YearMenuScreen(
 ) {
     val yearLabel = AcademicYear.labelFor(academicYear)
     val scopeLabel = branchDisplayName(branchCode)
-    val subjectCount = viewModel.getSubjectsForBranchAndYear(branchCode, academicYear).size
-    val notes by viewModel.notes.collectAsStateWithLifecycle()
-    // Refresh counts when the synced catalog lands.
-    val catalogRev by viewModel.catalogRevision.collectAsStateWithLifecycle()
-    val noteCount = notes.count { n ->
-        n.academicYear == academicYear &&
-            (
-                academicYear == 1 ||
-                    n.branchCode.equals(branchCode, ignoreCase = true)
-                )
-    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -126,7 +113,6 @@ fun YearMenuScreen(
             ) {
                 M3StackedListItem(
                     title = "Question Papers",
-                    supportingText = "$subjectCount ${if (subjectCount == 1) "subject" else "subjects"} · previous year papers",
                     leadingIcon = Icons.Filled.LibraryBooks,
                     index = 0,
                     totalCount = 2,
@@ -143,7 +129,6 @@ fun YearMenuScreen(
                 )
                 M3StackedListItem(
                     title = "Study Notes",
-                    supportingText = "$noteCount ${if (noteCount == 1) "note" else "notes"} · admin published",
                     leadingIcon = Icons.Filled.NoteAlt,
                     index = 1,
                     totalCount = 2,

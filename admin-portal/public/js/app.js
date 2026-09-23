@@ -13,7 +13,8 @@ const state = {
   notes: [],
   paperFilter: { branch: "", q: "" },
   subjectFilter: { branch: "", year: "" },
-  noteFilter: { branch: "" },
+  noteFilter: { branch: "", subject: "", q: "" },
+  selectedPapers: new Set(),
   pendingFile: null,
 };
 
@@ -218,7 +219,9 @@ async function renderDashboard() {
   $("#viewSubtitle").textContent = "Pick an action — the app updates as soon as you save";
   $("#topbarActions").innerHTML = "";
 
-  const withFiles = state.papers.filter((p) => p.fileId).length;
+  const pdfsLive =
+    state.papers.filter((p) => p.fileId).length +
+    state.notes.filter((n) => n.storagePath).length;
   const recent = [
     ...state.papers.filter((p) => p.uploadedAt).map((p) => ({
       kind: "Paper", title: p.title, meta: `${p.branchCode} · ${p.subjectName} · ${p.year}`, at: p.uploadedAt, hasPdf: !!p.fileId,
@@ -251,7 +254,7 @@ async function renderDashboard() {
       <div class="card"><div class="stat-num">${state.subjects.length}</div><div class="stat-label">Subjects</div></div>
       <div class="card"><div class="stat-num">${state.papers.length}</div><div class="stat-label">Question papers</div></div>
       <div class="card"><div class="stat-num">${state.notes.length}</div><div class="stat-label">Study notes</div></div>
-      <div class="card"><div class="stat-num">${withFiles}</div><div class="stat-label">PDFs live</div></div>
+      <div class="card"><div class="stat-num">${pdfsLive}</div><div class="stat-label">PDFs in cloud</div></div>
     </div>
 
     <div class="panel">
@@ -292,19 +295,33 @@ function renderPapers() {
     return true;
   });
 
+  // Drop selections for papers that no longer exist
+  for (const id of [...state.selectedPapers]) {
+    if (!state.papers.some((p) => p.id === id)) state.selectedPapers.delete(id);
+  }
+  const selCount = rows.filter((p) => state.selectedPapers.has(p.id)).length;
+  const allChecked = rows.length > 0 && selCount === rows.length;
+
   $("#view-papers").innerHTML = `
     <div class="panel">
       <div class="filters">
         <select id="fBranch">${branchOpts}</select>
         <input id="fQ" type="search" placeholder="Search title, subject, year…" value="${esc(f.q)}" />
+        ${selCount > 0 ? `
+        <button class="btn danger small" id="btnBulkDel">🗑 Delete selected (${selCount})</button>
+        <button class="btn ghost small" id="btnBulkClear">Clear</button>` : ""}
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Paper</th><th>Branch</th><th>Year</th><th>PDF</th><th></th></tr></thead>
+        <thead><tr>
+          <th class="col-check"><input type="checkbox" id="checkAll" ${allChecked ? "checked" : ""} aria-label="Select all papers" /></th>
+          <th>Paper</th><th>Branch</th><th>Year</th><th>PDF</th><th></th>
+        </tr></thead>
         <tbody>
           ${rows.length === 0
-            ? `<tr><td colspan="5" class="empty"><strong>No papers match</strong>Adjust filters or hit Upload paper.</td></tr>`
+            ? `<tr><td colspan="6" class="empty"><strong>No papers match</strong>Adjust filters or hit Upload paper.</td></tr>`
             : rows.map((p) => `
-          <tr>
+          <tr class="${state.selectedPapers.has(p.id) ? "row-selected" : ""}">
+            <td class="col-check"><input type="checkbox" data-check="${esc(p.id)}" ${state.selectedPapers.has(p.id) ? "checked" : ""} aria-label="Select ${esc(p.title)}" /></td>
             <td>
               <b>${esc(p.title)}</b><br>
               <span class="muted">${esc(p.subjectName)}${p.examType ? " · " + esc(p.examType) : ""}</span>
@@ -322,7 +339,7 @@ function renderPapers() {
           </tr>`).join("")}
         </tbody>
       </table></div>
-      <p class="muted" style="margin:12px 0 0">${rows.length} paper(s)</p>
+      <p class="muted" style="margin:12px 0 0">${rows.length} paper(s)${selCount ? ` · ${selCount} selected` : ""}</p>
     </div>`;
 
   $("#fBranch").addEventListener("change", (e) => { state.paperFilter.branch = e.target.value; renderPapers(); });
@@ -330,6 +347,23 @@ function renderPapers() {
     state.paperFilter.q = e.target.value;
     clearTimeout(window.__pq);
     window.__pq = setTimeout(renderPapers, 200);
+  });
+  $("#checkAll").addEventListener("change", (e) => {
+    if (e.target.checked) rows.forEach((p) => state.selectedPapers.add(p.id));
+    else rows.forEach((p) => state.selectedPapers.delete(p.id));
+    renderPapers();
+  });
+  const bulkDel = $("#btnBulkDel");
+  if (bulkDel) bulkDel.addEventListener("click", deleteSelectedPapers);
+  const bulkClear = $("#btnBulkClear");
+  if (bulkClear) bulkClear.addEventListener("click", () => { state.selectedPapers.clear(); renderPapers(); });
+  $("#view-papers").querySelectorAll("input[data-check]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const id = cb.dataset.check;
+      if (cb.checked) state.selectedPapers.add(id);
+      else state.selectedPapers.delete(id);
+      renderPapers();
+    });
   });
   $("#view-papers").querySelectorAll("button[data-act]").forEach((b) => {
     const id = b.dataset.id;
@@ -339,12 +373,14 @@ function renderPapers() {
   });
 }
 
-function subjectSelectOptions(branchCode, selectedName) {
+function subjectSelectOptions(branchCode, selectedName, opts) {
+  const allowEmpty = !!(opts && opts.allowEmpty);
   const pool = state.subjects.filter((s) => s.branchCode === branchCode);
+  const empty = allowEmpty ? `<option value="">— none —</option>` : "";
   if (pool.length === 0) {
-    return `<option value="">— add a subject first —</option>`;
+    return empty + `<option value="">— add a subject first —</option>`;
   }
-  return pool.map((s) =>
+  return empty + pool.map((s) =>
     `<option value="${esc(s.name)}" ${s.name === selectedName ? "selected" : ""}>${esc(s.name)} (Y${s.academicYear})</option>`
   ).join("");
 }
@@ -511,11 +547,36 @@ async function deletePaper(id) {
   const p = state.papers.find((x) => x.id === id);
   confirmDialog("Delete paper?", `"${p.title}" (${p.branchCode} · ${p.subjectName}) will be removed from the app.`, "Delete", async () => {
     await DB.del("papers", id);
-    if (p.fileId) await DB.delFile(p.fileId);
+    if (p.fileId) { try { await DB.delFile(p.fileId); } catch { /* gone */ } }
+    state.selectedPapers.delete(id);
     toast("Paper deleted", "ok");
     await reloadAll();
     renderPapers();
   });
+}
+
+async function deleteSelectedPapers() {
+  const ids = [...state.selectedPapers];
+  if (ids.length === 0) return;
+  confirmDialog(
+    `Delete ${ids.length} paper(s)?`,
+    `Selected papers and their PDFs will be removed from the app. This cannot be undone.`,
+    `Delete ${ids.length}`,
+    async () => {
+      let failed = 0;
+      for (const id of ids) {
+        const p = state.papers.find((x) => x.id === id);
+        try {
+          await DB.del("papers", id);
+          if (p && p.fileId) { try { await DB.delFile(p.fileId); } catch { /* already gone */ } }
+        } catch { failed++; }
+      }
+      state.selectedPapers.clear();
+      toast(failed ? `Deleted with ${failed} error(s)` : `${ids.length} paper(s) deleted`, failed ? "err" : "ok");
+      await reloadAll();
+      renderPapers();
+    }
+  );
 }
 
 async function openPdf(id) {
@@ -660,12 +721,35 @@ function deleteSubject(s) {
  * ============================================================ */
 function renderNotes() {
   $("#viewTitle").textContent = "Notes";
-  $("#viewSubtitle").textContent = "Study notes students open from Home → First Year";
+  $("#viewSubtitle").textContent = "Study notes grouped by subject — like papers";
   $("#topbarActions").innerHTML = `<button class="btn" id="btnAddNote">+ Add note</button>`;
   $("#btnAddNote").addEventListener("click", () => openNoteModal(null));
 
   const f = state.noteFilter;
-  const rows = state.notes.filter((n) => !f.branch || n.branchCode === f.branch);
+  const subjectsInNotes = [...new Set(state.notes.map((n) => n.subjectName || "General"))]
+    .sort((a, b) => a.localeCompare(b));
+
+  const rows = state.notes.filter((n) => {
+    if (f.branch && n.branchCode !== f.branch) return false;
+    const subj = n.subjectName || "General";
+    if (f.subject && subj !== f.subject) return false;
+    if (f.q && !(n.title + " " + (n.subjectName || "") + " " + (n.content || "")).toLowerCase().includes(f.q.toLowerCase())) return false;
+    return true;
+  });
+
+  // Group by subject (same mental model as the app's paper library)
+  const groups = new Map();
+  for (const n of rows) {
+    const key = n.subjectName || "General";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(n);
+  }
+  const sortedKeys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+
+  const subjectOpts = [
+    `<option value="">All subjects</option>`,
+    ...subjectsInNotes.map((s) => `<option value="${esc(s)}" ${f.subject === s ? "selected" : ""}>${esc(s)}</option>`),
+  ].join("");
 
   $("#view-notes").innerHTML = `
     <div class="panel">
@@ -674,13 +758,17 @@ function renderNotes() {
           <option value="">All branches</option>
           ${BRANCHES.map((b) => `<option value="${b.code}" ${f.branch === b.code ? "selected" : ""}>${b.code}</option>`).join("")}
         </select>
+        <select id="nSubject">${subjectOpts}</select>
+        <input id="nQ" type="search" placeholder="Search notes…" value="${esc(f.q || "")}" />
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Note</th><th>Branch</th><th>Year</th><th>PDF</th><th>Updated</th><th></th></tr></thead>
         <tbody>
           ${rows.length === 0
             ? `<tr><td colspan="6" class="empty"><strong>No notes yet</strong>Add one so students have something to revise.</td></tr>`
-            : rows.map((n) => `
+            : sortedKeys.map((subj) => `
+          <tr class="group-row"><td colspan="6">${esc(subj)} <span class="muted">· ${groups.get(subj).length}</span></td></tr>
+          ${groups.get(subj).map((n) => `
           <tr>
             <td>
               <b>${esc(n.title)}</b>
@@ -695,12 +783,19 @@ function renderNotes() {
               <button class="icon-btn" data-act="edit" data-id="${n.id}" title="Edit">✎</button>
               <button class="icon-btn danger" data-act="del" data-id="${n.id}" title="Delete">🗑</button>
             </div></td>
-          </tr>`).join("")}
+          </tr>`).join("")}`).join("")}
         </tbody>
       </table></div>
+      <p class="muted" style="margin:12px 0 0">${rows.length} note(s) · ${sortedKeys.length} subject group(s)</p>
     </div>`;
 
   $("#nBranch").addEventListener("change", (e) => { state.noteFilter.branch = e.target.value; renderNotes(); });
+  $("#nSubject").addEventListener("change", (e) => { state.noteFilter.subject = e.target.value; renderNotes(); });
+  $("#nQ").addEventListener("input", (e) => {
+    state.noteFilter.q = e.target.value;
+    clearTimeout(window.__nq);
+    window.__nq = setTimeout(renderNotes, 200);
+  });
   $("#view-notes").querySelectorAll("button[data-act]").forEach((b) => {
     const id = Number(b.dataset.id);
     const note = state.notes.find((n) => n.id === id);
@@ -746,8 +841,8 @@ function openNoteModal(existing) {
         <p class="hint" id="yearHint">First Year is COMMON for all branches.</p>
       </div>
     </div>
-    <div class="field"><label>Subject <span class="muted">(optional)</span></label>
-      <input id="nSubject" value="${esc(n.subjectName || "")}" placeholder="e.g. Signals and Systems" />
+    <div class="field"><label>Subject <span class="muted">(groups the note like papers)</span></label>
+      <select id="nSubject"></select>
     </div>
     <div class="field"><label>Short description <span class="muted">(shown under title in app)</span></label>
       <textarea id="nContent" rows="2" placeholder="One line is enough">${esc(n.content || "")}</textarea>
@@ -768,6 +863,10 @@ function openNoteModal(existing) {
   ]);
 
   const branchSel = $("#nBranchM"), yearSel = $("#nYearM"), yearHint = $("#yearHint");
+  const subjectSel = $("#nSubject");
+  const refreshNoteSubjects = () => {
+    subjectSel.innerHTML = subjectSelectOptions(branchSel.value, n.subjectName || undefined, { allowEmpty: true });
+  };
   const syncYear = () => {
     if (branchSel.value === "COMMON") {
       yearSel.value = "1";
@@ -780,8 +879,14 @@ function openNoteModal(existing) {
       yearHint.style.display = "none";
     }
   };
-  branchSel.addEventListener("change", () => { syncYear(); savePrefs({ branch: branchSel.value }); });
+  branchSel.addEventListener("change", () => {
+    n.subjectName = "";
+    syncYear();
+    refreshNoteSubjects();
+    savePrefs({ branch: branchSel.value });
+  });
   syncYear();
+  refreshNoteSubjects();
 
   wireDropzone("nDrop", "nFile", "nFileInfo", (file) => {
     if (!acceptPdf(file)) return;
@@ -800,7 +905,7 @@ async function saveNote(existing) {
   const row = {
     title,
     content,
-    subjectName: $("#nSubject").value.trim(),
+    subjectName: $("#nSubject").value || "",
     branchCode,
     academicYear,
     fileUrl: existing ? (existing.fileUrl || "") : "",
@@ -834,9 +939,15 @@ async function saveNote(existing) {
  * ============================================================ */
 function renderData() {
   $("#viewTitle").textContent = "Settings";
-  $("#viewSubtitle").textContent = "Backup, import, and rare tools";
+  $("#viewSubtitle").textContent = "Account, backup, and rare tools";
   $("#topbarActions").innerHTML = "";
+  const session = JSON.parse(localStorage.getItem("pyq-admin-session") || "{}");
   $("#view-data").innerHTML = `
+    <div class="panel">
+      <h3>Account</h3>
+      <p class="muted">${esc(session.email || "")}</p>
+      <button class="btn secondary" id="btnSettingsLogout">Log out</button>
+    </div>
     <div class="panel">
       <h3>Export backup</h3>
       <p class="muted">Downloads subjects, papers and notes as JSON. PDFs stay in cloud storage — re-attach after a restore.</p>
@@ -864,6 +975,11 @@ notes(id, title, content, subjectName, branchCode,
       <button class="btn danger" id="btnReset">Erase cloud data</button>
     </div>`;
 
+  $("#btnSettingsLogout").addEventListener("click", () => {
+    DB.logout();
+    showLogin();
+    toast("Logged out");
+  });
   $("#btnExport").addEventListener("click", async () => {
     const data = await DB.exportJSON();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });

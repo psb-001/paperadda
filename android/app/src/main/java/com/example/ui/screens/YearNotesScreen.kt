@@ -138,28 +138,44 @@ fun YearNotesScreen(
                     )
                 }
             } else {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(3.dp)
-                ) {
-                    notes.forEachIndexed { index, note ->
-                        val isOpening = openingNoteId == note.id
-                        M3StackedListItem(
-                            title = note.title,
-                            supportingText = buildString {
-                                append(noteSupportingText(note))
-                                if (note.content.isNotBlank()) {
-                                    if (isNotEmpty()) append(" · ")
-                                    append(note.content)
-                                }
-                                if (isOpening) append(" · Opening…")
-                            },
-                            leadingIcon = Icons.Filled.EditNote,
-                            index = index,
-                            totalCount = notes.size,
-                            testTag = "note_item_${note.id}",
-                            onClick = { viewModel.openNotePdf(note) }
-                        )
+                val grouped = notes
+                    .groupBy { n -> n.subjectName.ifBlank { "General" } }
+                    .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+
+                grouped.forEach { (subject, subjectNotes) ->
+                    Text(
+                        text = subject,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 16.dp, bottom = 8.dp)
+                            .testTag("notes_subject_${subject.replace(Regex("[^A-Za-z0-9]+"), "_")}")
+                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        subjectNotes.forEachIndexed { index, note ->
+                            val isOpening = openingNoteId == note.id
+                            M3StackedListItem(
+                                title = note.title,
+                                supportingText = buildString {
+                                    append(noteSupportingText(note))
+                                    if (note.content.isNotBlank()) {
+                                        if (isNotEmpty()) append(" · ")
+                                        append(note.content)
+                                    }
+                                    if (isOpening) append(" · Opening…")
+                                },
+                                leadingIcon = Icons.Filled.EditNote,
+                                index = index,
+                                totalCount = subjectNotes.size,
+                                testTag = "note_item_${note.id}",
+                                onClick = { viewModel.openNotePdf(note) }
+                            )
+                        }
                     }
                 }
             }

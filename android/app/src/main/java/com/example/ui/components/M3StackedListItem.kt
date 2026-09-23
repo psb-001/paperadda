@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun M3StackedListItem(
     title: String,
-    supportingText: String,
+    supportingText: String = "",
     leadingIcon: ImageVector,
     index: Int,
     totalCount: Int,
@@ -101,13 +101,15 @@ fun M3StackedListItem(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                text = supportingText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (supportingText.isNotBlank()) {
+                Text(
+                    text = supportingText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         Spacer(modifier = Modifier.width(8.dp))
