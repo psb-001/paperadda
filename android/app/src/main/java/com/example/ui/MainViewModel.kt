@@ -60,13 +60,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val catalogRevision: StateFlow<Int> = _catalogRevision.asStateFlow()
 
     init {
-        // Offline cache first (instant UI), then remote refresh.
-        // Until the backend lands, the published-notes list is seeded locally.
+        // Offline cache first (instant UI), then remote refresh. No local seed.
         viewModelScope.launch {
             repository.loadCache()
             _catalogRevision.value++
             if (repository.refreshFromRemote()) _catalogRevision.value++
-            noteRepository.seedIfEmpty()
             noteRepository.refreshFromRemote(remote)
         }
     }
@@ -152,15 +150,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return repository.getPapersForSubject(subjectName, branchCode)
     }
 
-    fun getPaperById(id: String): QuestionPaper {
-        return repository.getPaperById(id) ?: QuestionPaper(
-            id = id,
-            title = "End Semester Examination 2025",
-            subjectName = "Signals and Systems",
-            branchCode = "ENTC",
-            year = "2025",
-            examType = "End Semester Examination"
-        )
+    fun getPaperById(id: String): QuestionPaper? {
+        return repository.getPaperById(id)
     }
 
     fun onSearchQueryChanged(query: String) {

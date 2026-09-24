@@ -57,6 +57,35 @@ fun PaperDetailsScreen(
     // Re-read the catalog when a sync lands.
     val catalogRev by viewModel.catalogRevision.collectAsStateWithLifecycle()
     val paper = viewModel.getPaperById(paperId)
+    if (paper == null) {
+        Scaffold(
+            modifier = modifier.fillMaxSize(),
+            containerColor = MaterialTheme.colorScheme.surface,
+            topBar = {
+                M3TopBar(
+                    title = "Paper Details",
+                    navigationIcon = Icons.AutoMirrored.Filled.ArrowBack,
+                    navigationIconContentDescription = "Go back",
+                    onNavigationClick = { viewModel.navigateBack() },
+                    testTag = "paper_details_top_bar"
+                )
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Paper not found",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        return
+    }
     val isSaved = viewModel.isPaperSaved(paper.id)
     val isDownloading = viewModel.downloadingPaperId == paper.id
 

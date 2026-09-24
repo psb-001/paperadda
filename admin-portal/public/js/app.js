@@ -15,6 +15,8 @@ const state = {
   subjectFilter: { branch: "", year: "" },
   noteFilter: { branch: "", subject: "", q: "" },
   selectedPapers: new Set(),
+  selectedNotes: new Set(),
+  selectedSubjects: new Set(),
   pendingFile: null,
 };
 
@@ -598,6 +600,12 @@ function renderSubjects() {
   const rows = state.subjects.filter((s) =>
     (!f.branch || s.branchCode === f.branch) && (!f.year || s.academicYear === Number(f.year)));
 
+  for (const id of [...state.selectedSubjects]) {
+    if (!state.subjects.some((s) => s.id === id)) state.selectedSubjects.delete(id);
+  }
+  const selCount = rows.filter((s) => state.selectedSubjects.has(s.id)).length;
+  const allChecked = rows.length > 0 && selCount === rows.length;
+
   $("#view-subjects").innerHTML = `
     <div class="panel">
       <div class="filters">
@@ -609,15 +617,22 @@ function renderSubjects() {
           <option value="">All years</option>
           ${YEARS.map((y) => `<option value="${y.year}" ${String(f.year) === String(y.year) ? "selected" : ""}>${y.label}</option>`).join("")}
         </select>
+        ${selCount > 0 ? `
+        <button class="btn danger small" id="btnBulkDelSub">🗑 Delete selected (${selCount})</button>
+        <button class="btn ghost small" id="btnBulkClearSub">Clear</button>` : ""}
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Subject</th><th>Branch</th><th>Year</th><th>Papers</th><th></th></tr></thead>
+        <thead><tr>
+          <th class="col-check"><input type="checkbox" id="checkAllSub" ${allChecked ? "checked" : ""} aria-label="Select all subjects" /></th>
+          <th>Subject</th><th>Branch</th><th>Year</th><th>Papers</th><th></th>
+        </tr></thead>
         <tbody>
           ${rows.length === 0
-            ? `<tr><td colspan="5" class="empty"><strong>No subjects here</strong>Add one to start publishing papers.</td></tr>`
+            ? `<tr><td colspan="6" class="empty"><strong>No subjects here</strong>Add one to start publishing papers.</td></tr>`
             : rows.map((s) => {
               const n = papersOfSubject(s.branchCode, s.name).length;
-              return `<tr>
+              return `<tr class="${state.selectedSubjects.has(s.id) ? "row-selected" : ""}">
+                <td class="col-check"><input type="checkbox" data-check="${esc(s.id)}" ${state.selectedSubjects.has(s.id) ? "checked" : ""} aria-label="Select ${esc(s.name)}" /></td>
                 <td><b>${esc(s.name)}</b></td>
                 <td><span class="badge">${esc(s.branchCode)}</span></td>
                 <td>${yearLabel(s.academicYear)}</td>
@@ -630,10 +645,28 @@ function renderSubjects() {
             }).join("")}
         </tbody>
       </table></div>
+      <p class="muted" style="margin:12px 0 0">${rows.length} subject(s)${selCount ? ` · ${selCount} selected` : ""}</p>
     </div>`;
 
   $("#sBranch").addEventListener("change", (e) => { state.subjectFilter.branch = e.target.value; renderSubjects(); });
   $("#sYear").addEventListener("change", (e) => { state.subjectFilter.year = e.target.value; renderSubjects(); });
+  $("#checkAllSub").addEventListener("change", (e) => {
+    if (e.target.checked) rows.forEach((s) => state.selectedSubjects.add(s.id));
+    else rows.forEach((s) => state.selectedSubjects.delete(s.id));
+    renderSubjects();
+  });
+  const bulkDelSub = $("#btnBulkDelSub");
+  if (bulkDelSub) bulkDelSub.addEventListener("click", deleteSelectedSubjects);
+  const bulkClearSub = $("#btnBulkClearSub");
+  if (bulkClearSub) bulkClearSub.addEventListener("click", () => { state.selectedSubjects.clear(); renderSubjects(); });
+  $("#view-subjects").querySelectorAll("input[data-check]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const id = cb.dataset.check;
+      if (cb.checked) state.selectedSubjects.add(id);
+      else state.selectedSubjects.delete(id);
+      renderSubjects();
+    });
+  });
   $("#view-subjects").querySelectorAll("button[data-act]").forEach((b) => {
     const sub = state.subjects.find((s) => s.id === b.dataset.id);
     if (b.dataset.act === "edit") b.addEventListener("click", () => openSubjectModal(sub));
@@ -710,10 +743,40 @@ function deleteSubject(s) {
   }
   confirmDialog("Delete subject?", `"${s.name}" (${s.branchCode}) will be removed.`, "Delete", async () => {
     await DB.del("subjects", s.id);
+    state.selectedSubjects.delete(s.id);
     toast("Subject deleted", "ok");
     await reloadAll();
     renderSubjects();
   });
+}
+
+async function deleteSelectedSubjects() {
+  const ids = [...state.selectedSubjects];
+  if (ids.length === 0) return;
+  const blocked = ids.filter((id) => {
+    const s = state.subjects.find((x) => x.id === id);
+    return s && papersOfSubject(s.branchCode, s.name).length > 0;
+  });
+  const deletable = ids.filter((id) => !blocked.includes(id));
+  if (deletable.length === 0) {
+    toast("Selected subjects still have papers — delete those first.", "err");
+    return;
+  }
+  confirmDialog(
+    `Delete ${deletable.length} subject(s)?` + (blocked.length ? ` (${blocked.length} skipped — still have papers)` : ""),
+    `Selected subjects will be removed from the app.`,
+    `Delete ${deletable.length}`,
+    async () => {
+      let failed = 0;
+      for (const id of deletable) {
+        try { await DB.del("subjects", id); state.selectedSubjects.delete(id); }
+        catch { failed++; }
+      }
+      toast(failed ? `Deleted with ${failed} error(s)` : `${deletable.length} subject(s) deleted`, failed ? "err" : "ok");
+      await reloadAll();
+      renderSubjects();
+    }
+  );
 }
 
 /* ============================================================
@@ -751,6 +814,12 @@ function renderNotes() {
     ...subjectsInNotes.map((s) => `<option value="${esc(s)}" ${f.subject === s ? "selected" : ""}>${esc(s)}</option>`),
   ].join("");
 
+  for (const id of [...state.selectedNotes]) {
+    if (!state.notes.some((n) => n.id === id)) state.selectedNotes.delete(id);
+  }
+  const selCount = rows.filter((n) => state.selectedNotes.has(n.id)).length;
+  const allChecked = rows.length > 0 && selCount === rows.length;
+
   $("#view-notes").innerHTML = `
     <div class="panel">
       <div class="filters">
@@ -760,16 +829,23 @@ function renderNotes() {
         </select>
         <select id="nSubject">${subjectOpts}</select>
         <input id="nQ" type="search" placeholder="Search notes…" value="${esc(f.q || "")}" />
+        ${selCount > 0 ? `
+        <button class="btn danger small" id="btnBulkDelNote">🗑 Delete selected (${selCount})</button>
+        <button class="btn ghost small" id="btnBulkClearNote">Clear</button>` : ""}
       </div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Note</th><th>Branch</th><th>Year</th><th>PDF</th><th>Updated</th><th></th></tr></thead>
+        <thead><tr>
+          <th class="col-check"><input type="checkbox" id="checkAllNote" ${allChecked ? "checked" : ""} aria-label="Select all notes" /></th>
+          <th>Note</th><th>Branch</th><th>Year</th><th>PDF</th><th>Updated</th><th></th>
+        </tr></thead>
         <tbody>
           ${rows.length === 0
-            ? `<tr><td colspan="6" class="empty"><strong>No notes yet</strong>Add one so students have something to revise.</td></tr>`
+            ? `<tr><td colspan="7" class="empty"><strong>No notes yet</strong>Add one so students have something to revise.</td></tr>`
             : sortedKeys.map((subj) => `
-          <tr class="group-row"><td colspan="6">${esc(subj)} <span class="muted">· ${groups.get(subj).length}</span></td></tr>
+          <tr class="group-row"><td colspan="7">${esc(subj)} <span class="muted">· ${groups.get(subj).length}</span></td></tr>
           ${groups.get(subj).map((n) => `
-          <tr>
+          <tr class="${state.selectedNotes.has(n.id) ? "row-selected" : ""}">
+            <td class="col-check"><input type="checkbox" data-check="${esc(n.id)}" ${state.selectedNotes.has(n.id) ? "checked" : ""} aria-label="Select ${esc(n.title)}" /></td>
             <td>
               <b>${esc(n.title)}</b>
               ${n.content ? `<br><span class="muted">${esc(n.content.slice(0, 80))}${n.content.length > 80 ? "…" : ""}</span>` : ""}
@@ -786,7 +862,7 @@ function renderNotes() {
           </tr>`).join("")}`).join("")}
         </tbody>
       </table></div>
-      <p class="muted" style="margin:12px 0 0">${rows.length} note(s) · ${sortedKeys.length} subject group(s)</p>
+      <p class="muted" style="margin:12px 0 0">${rows.length} note(s) · ${sortedKeys.length} subject group(s)${selCount ? ` · ${selCount} selected` : ""}</p>
     </div>`;
 
   $("#nBranch").addEventListener("change", (e) => { state.noteFilter.branch = e.target.value; renderNotes(); });
@@ -795,6 +871,23 @@ function renderNotes() {
     state.noteFilter.q = e.target.value;
     clearTimeout(window.__nq);
     window.__nq = setTimeout(renderNotes, 200);
+  });
+  $("#checkAllNote").addEventListener("change", (e) => {
+    if (e.target.checked) rows.forEach((n) => state.selectedNotes.add(n.id));
+    else rows.forEach((n) => state.selectedNotes.delete(n.id));
+    renderNotes();
+  });
+  const bulkDelNote = $("#btnBulkDelNote");
+  if (bulkDelNote) bulkDelNote.addEventListener("click", deleteSelectedNotes);
+  const bulkClearNote = $("#btnBulkClearNote");
+  if (bulkClearNote) bulkClearNote.addEventListener("click", () => { state.selectedNotes.clear(); renderNotes(); });
+  $("#view-notes").querySelectorAll("input[data-check]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const id = Number(cb.dataset.check);
+      if (cb.checked) state.selectedNotes.add(id);
+      else state.selectedNotes.delete(id);
+      renderNotes();
+    });
   });
   $("#view-notes").querySelectorAll("button[data-act]").forEach((b) => {
     const id = Number(b.dataset.id);
@@ -808,12 +901,37 @@ function renderNotes() {
       confirmDialog("Delete note?", `"${note.title}" will be removed.`, "Delete", async () => {
         await DB.del("notes", id);
         if (note.storagePath) { try { await DB.delFile(note.storagePath); } catch { /* gone */ } }
+        state.selectedNotes.delete(id);
         toast("Note deleted", "ok");
         await reloadAll();
         renderNotes();
       });
     });
   });
+}
+
+async function deleteSelectedNotes() {
+  const ids = [...state.selectedNotes];
+  if (ids.length === 0) return;
+  confirmDialog(
+    `Delete ${ids.length} note(s)?`,
+    `Selected notes and their PDFs will be removed. This cannot be undone.`,
+    `Delete ${ids.length}`,
+    async () => {
+      let failed = 0;
+      for (const id of ids) {
+        const n = state.notes.find((x) => x.id === id);
+        try {
+          await DB.del("notes", id);
+          if (n && n.storagePath) { try { await DB.delFile(n.storagePath); } catch { /* gone */ } }
+        } catch { failed++; }
+      }
+      state.selectedNotes.clear();
+      toast(failed ? `Deleted with ${failed} error(s)` : `${ids.length} note(s) deleted`, failed ? "err" : "ok");
+      await reloadAll();
+      renderNotes();
+    }
+  );
 }
 
 function openNoteModal(existing) {
