@@ -23,10 +23,15 @@ android {
 
     defaultConfig {
         applicationId = "com.paperadda.app"
+        // Kept at 24 deliberately. Raising it to 29 would remove the need for
+        // the legacy storage permission entirely, but AGP 9 stores classes.dex
+        // uncompressed once minSdk reaches 29, which took the APK from 2.3 MB
+        // to 3.7 MB. For an app that is downloaded once over mobile data and then
+        // read offline, that trade is not worth it.
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 9
+        versionName = "1.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -44,7 +49,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 + resource shrinking. Without this the release APK ships every
+            // one of the ~4,900 material-icons-extended classes (in five styles)
+            // even though the app references about a hundred.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -94,6 +103,12 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // BouncyCastle arrives with PDFBox for encrypted-PDF support, and it
+            // ships parameter files for post-quantum key exchange (Picnic, SIKE,
+            // ...). Those are ~4 MB of the APK and are never touched when
+            // reading a question paper. Only the standard AES decryption paths
+            // a PDF can actually use are kept.
+            excludes += "org/bouncycastle/pqc/**"
         }
     }
 }
@@ -101,6 +116,9 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
+    // Renders, extracts text from and searches PDFs far better than the framework
+    // PdfRenderer, and opens password-protected files.
+    implementation(libs.pdfbox.android)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)

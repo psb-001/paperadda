@@ -1,18 +1,18 @@
 /* ============================================================
- * PYQ Hub Admin — data layer (Supabase backend).
+ * PaperAdda Admin — data layer (Supabase backend).
  *
  * Same API surface the UI was built against; underneath it is
  * PostgREST + Storage + Auth over plain fetch (no dependencies).
- * Tables: subjects, papers, notes. PDFs: storage bucket `papers`.
- * Reads are public; writes require the admin login (RLS enforced
- * server-side — the app can never bypass this).
+ * Catalog tables: subjects, papers, notes. Student requests are handled by
+ * authenticated Edge Function actions. PDFs use storage bucket `papers`.
+ * Catalog reads are public; catalog writes require the admin login.
  * ============================================================ */
 "use strict";
 
 const DB = (() => {
   const base = SUPABASE.url;
   const BUCKET = "papers";
-  const SESSION_KEY = "pyq-admin-session";
+  const SESSION_KEY = "paperadda-admin-session";
 
   let session = null;
   try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch { session = null; }
@@ -60,7 +60,8 @@ const DB = (() => {
       throw new Error(msg);
     }
     const j = await res.json();
-    session = { access_token: j.access_token, refresh_token: j.refresh_token, email: (j.user && j.user.email) || email, expires_at: Date.now() + (j.expires_in || 3600) * 1000 };
+    const meta = (j.user && j.user.user_metadata) || {};
+    session = { access_token: j.access_token, refresh_token: j.refresh_token, email: (j.user && j.user.email) || email, displayName: meta.display_name || meta.full_name || "", expires_at: Date.now() + (j.expires_in || 3600) * 1000 };
     saveSession();
     return session;
   }
@@ -77,6 +78,96 @@ const DB = (() => {
   }
 
   const loggedIn = () => !!session;
+
+  /* ---------------- own account (display name + password) ---------------- */
+  // Self-service via the Auth user endpoint with the caller's own session
+  // token — no service key involved, so this is safe in browser code.
+  async function updateOwnAccount({ displayName, password } = {}) {
+    await ensureAuth();
+    const body = {};
+    if (displayName !== undefined) body.data = { display_name: String(displayName).slice(0, 80) };
+    if (password) {
+      if (password.length < 8) throw new Error("Password must be at least 8 characters.");
+      body.password = password;
+    }
+    if (!Object.keys(body).length) return session;
+    const res = await fetch(base + "/auth/v1/user", {
+      method: "PUT",
+      headers: { apikey: SUPABASE.anonKey, Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.status === 401) { logout(); throw new Error("Session expired — please log in again."); }
+    if (!res.ok) {
+      let msg = "Update failed (" + res.status + ")";
+      try { const j = await res.json(); if (j.msg) msg = j.msg; else if (j.error_description) msg = j.error_description; else if (j.message) msg = j.message; } catch { /* ignore */ }
+      throw new Error(msg);
+    }
+    const u = await res.json();
+    const meta = (u && u.user_metadata) || {};
+    session.displayName = meta.display_name || session.displayName || "";
+    saveSession();
+    return session;
+  }
+
+  /* ---------------- team (Edge Function; service_role stays server-side) ---------------- */
+  // Creating/listing/removing users and resetting passwords requires the
+  // service_role key, which must never ship in browser code. The
+  // `admin-users` Edge Function holds it and only acts when the caller's
+  // JWT belongs to an email in public.admin_users.
+  async function team(action, payload) {
+    await ensureAuth();
+    const res = await fetch(base + "/functions/v1/admin-users", {
+      method: "POST",
+      headers: { apikey: SUPABASE.anonKey, Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...(payload || {}) }),
+    });
+    if (res.status === 401) { logout(); throw new Error("Session expired — please log in again."); }
+    let j = null;
+    try { j = await res.json(); } catch { /* ignore */ }
+    if (!res.ok) throw new Error((j && j.error) || ("Request failed (" + res.status + ")"));
+    return j;
+  }
+
+  const listTeam = async () => ((await team("list")).users || []);
+  const inviteTeamMember = (email, password) => team("invite", { email, password });
+  const removeTeamMember = (id) => team("remove", { id });
+  const resetTeamPassword = (id, password) => team("set-password", { id, password });
+
+  async function contentRequest(action, payload) {
+    await ensureAuth();
+    const res = await fetch(base + "/functions/v1/content-requests", {
+      method: "POST",
+      headers: { apikey: SUPABASE.anonKey, Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...(payload || {}) }),
+    });
+    if (res.status === 401) { logout(); throw new Error("Session expired — please log in again."); }
+    let j = null;
+    try { j = await res.json(); } catch {}
+    if (!res.ok) throw new Error((j && j.error) || ("Request failed (" + res.status + ")"));
+    return j;
+  }
+
+  const listAllRequests = async () => ((await contentRequest("listAll")).requests || []);
+  const updateRequest = (id, status, adminNote) => contentRequest("update", { id, status, adminNote });
+  const deleteRequest = (id) => contentRequest("deleteAll", { id });
+
+  async function feedback(action, payload) {
+    await ensureAuth();
+    const res = await fetch(base + "/functions/v1/feedback", {
+      method: "POST",
+      headers: { apikey: SUPABASE.anonKey, Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...(payload || {}) }),
+    });
+    if (res.status === 401) { logout(); throw new Error("Session expired — please log in again."); }
+    let j = null;
+    try { j = await res.json(); } catch {}
+    if (!res.ok) throw new Error((j && j.error) || ("Request failed (" + res.status + ")"));
+    return j;
+  }
+
+  const listAllFeedback = async () => ((await feedback("listAll")).feedback || []);
+  const updateFeedback = (id, status, adminNote) => feedback("update", { id, status, adminNote });
+  const deleteFeedback = (id) => feedback("deleteAll", { id });
 
   async function ensureAuth() {
     if (!session) throw new Error("Not logged in.");
@@ -137,7 +228,10 @@ const DB = (() => {
   const open = async () => true; // nothing local to open; session validated at boot
 
   const getAll = async (table) => {
-    const rows = await api(`/rest/v1/${table}?select=*&order=${table === "papers" ? "year.desc" : table === "notes" ? "updated_at.desc" : "id.asc"}`, {});
+    const order = table === "papers" ? "year.desc"
+      : table === "notes" ? "updated_at.desc"
+      : "id.asc";
+    const rows = await api(`/rest/v1/${table}?select=*&order=${order}`, {});
     return (rows || []).map((r) => fromRow(table, r));
   };
 
@@ -153,7 +247,6 @@ const DB = (() => {
   };
 
   const getMeta = async () => null;
-  const seedIfEmpty = async () => false; // backend is pre-seeded by setup
 
   /* ---------------- files (Storage bucket) ---------------- */
   const putFile = async (path, blob) => {
@@ -196,7 +289,7 @@ const DB = (() => {
 
   const importJSON = async (data) => {
     if (!data || !Array.isArray(data.subjects) || !Array.isArray(data.papers) || !Array.isArray(data.notes)) {
-      throw new Error("Not a valid PYQ Hub backup file.");
+      throw new Error("Not a valid PaperAdda backup file.");
     }
     // Replace table contents (files in Storage are untouched; re-link by re-uploading).
     for (const t of ["notes", "papers", "subjects"]) {
@@ -211,7 +304,7 @@ const DB = (() => {
     }
   };
 
-  const resetToSeed = async () => {
+  const eraseAllData = async () => {
     for (const t of ["notes", "papers", "subjects"]) {
       const existing = await getAll(t);
       for (const row of existing) await del(t, row.id);
@@ -220,5 +313,5 @@ const DB = (() => {
 
   const storageEstimate = async () => null; // cloud: shown as connection status instead
 
-  return { open, getAll, put, del, getMeta, seedIfEmpty, putFile, getFile, delFile, fileUrl, exportJSON, importJSON, resetToSeed, storageEstimate, login, logout, loggedIn };
+  return { open, getAll, put, del, getMeta, putFile, getFile, delFile, fileUrl, exportJSON, importJSON, eraseAllData, storageEstimate, login, logout, loggedIn, updateOwnAccount, listTeam, inviteTeamMember, removeTeamMember, resetTeamPassword, listAllRequests, updateRequest, deleteRequest, listAllFeedback, updateFeedback, deleteFeedback };
 })();

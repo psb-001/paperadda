@@ -185,7 +185,7 @@ body {
 .hint { font-size: 12px; color: var(--on-surface-variant); margin-top: 6px; }
 
 /* ========== Cards / stats ========== */
-.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
 .card {
   background: var(--surface-raised); border-radius: var(--radius-lg);
   padding: 20px; box-shadow: var(--shadow-1);
@@ -196,7 +196,7 @@ body {
 
 /* Quick action tiles on Home */
 .action-grid {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;
   margin-bottom: 24px;
 }
 .action-tile {
@@ -496,4 +496,97 @@ tbody tr.group-row:hover td { background: var(--surface-low); }
     align-items: stretch;
   }
   .toast { max-width: none; }
+}
+
+/* ========== Subject icons ========== */
+/* Material Symbols ligature font: the same glyph names the Android app uses. */
+.ms {
+  font-family: "Material Symbols Rounded", "Material Icons", sans-serif;
+  font-weight: normal; font-style: normal; font-size: 24px; line-height: 1;
+  letter-spacing: normal; text-transform: none; white-space: nowrap;
+  direction: ltr; -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'liga'; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+.icon-glyph { color: var(--primary); }
+.subj-cell { display: flex; align-items: center; gap: 8px; }
+.subj-cell .icon-glyph {
+  flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--primary-container); color: var(--on-primary-container);
+}
+
+.icon-picker { border: 1px solid var(--outline-variant); border-radius: var(--radius-md); overflow: hidden; }
+.icon-picker-head { display: flex; gap: 8px; padding: 10px; border-bottom: 1px solid var(--outline-variant); flex-wrap: wrap; }
+.icon-picker-head input[type="search"] { flex: 1 1 180px; min-width: 0; }
+.icon-picker-selected {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; background: var(--surface-container); font-size: 13px;
+}
+.icon-picker-selected > span:first-child { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--on-surface-variant); }
+.icon-picker-selected .icon-glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--primary-container); color: var(--on-primary-container);
+}
+.icon-picker-body { max-height: 300px; overflow-y: auto; padding: 6px 10px 10px; }
+.icon-group + .icon-group { margin-top: 12px; }
+.icon-group-title {
+  position: sticky; top: 0; z-index: 1; background: var(--surface-raised);
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--on-surface-variant); padding: 6px 0 4px;
+}
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(74px, 1fr)); gap: 6px; }
+.icon-tile {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 4px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; cursor: pointer; color: var(--on-surface);
+  font: inherit; min-width: 0; overflow: hidden;
+}
+.icon-tile:hover { background: var(--surface-container); }
+.icon-tile:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.icon-tile.selected { background: var(--primary-container); border-color: var(--primary); color: var(--on-primary-container); }
+.icon-tile.selected .icon-glyph { color: var(--on-primary-container); }
+.icon-tile-label {
+  font-size: 10px; line-height: 1.2; text-align: center; color: inherit;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ========== Bulk upload ========== */
+.check {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--on-surface); padding: 3px 0; cursor: pointer;
+}
+.check input { accent-color: var(--primary); width: 16px; height: 16px; flex: 0 0 auto; }
+.bulk-list {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 6px;
+  max-height: 340px; overflow-y: auto;
+}
+.bulk-row {
+  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.6fr) auto;
+  align-items: center; gap: 8px;
+  border: 1px solid var(--outline-variant); border-radius: var(--radius-sm);
+  padding: 8px 10px; background: var(--surface-container);
+}
+.bulk-row-main { min-width: 0; }
+.bulk-file {
+  font-size: 13px; font-weight: 500; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.bulk-sub { font-size: 11px; color: var(--on-surface-variant); }
+.bulk-row-fields { display: flex; gap: 6px; min-width: 0; }
+.bulk-row-fields input { min-width: 0; flex: 1 1 0; font-size: 12.5px; padding: 6px 8px; }
+.bulk-row-fields input[data-bulk-year] { flex: 0 0 74px; }
+.bulk-row-actions { display: flex; align-items: center; gap: 6px; }
+.bulk-status { font-size: 11px; font-weight: 600; white-space: nowrap; color: var(--on-surface-variant); }
+.bulk-status.uploading { color: var(--primary); }
+.bulk-status.done { color: var(--success); }
+.bulk-status.failed { color: var(--error); }
+.bulk-error {
+  grid-column: 1 / -1; font-size: 11.5px; color: var(--error);
+  background: var(--error-container); border-radius: 6px; padding: 5px 8px;
+}
+@media (max-width: 720px) {
+  .bulk-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .bulk-row-fields { grid-column: 1 / -1; }
 }

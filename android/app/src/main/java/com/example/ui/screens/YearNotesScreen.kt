@@ -1,12 +1,12 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -19,7 +19,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -31,6 +30,7 @@ import com.example.data.model.AcademicYear
 import com.example.data.model.BRANCH_COMMON
 import com.example.data.model.branchDisplayName
 import com.example.ui.MainViewModel
+import com.example.ui.components.M3EmptyState
 import com.example.ui.components.M3NavBar
 import com.example.ui.components.M3StackedListItem
 import com.example.ui.components.M3TopBar
@@ -125,57 +125,39 @@ fun YearNotesScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             if (notes.isEmpty()) {
-                Box(
+                M3EmptyState(
+                    icon = Icons.Filled.EditNote,
+                    title = "No notes published yet",
+                    message = "Study notes for $emptyScopeLabel will appear here when an admin adds them.",
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "No notes published for $emptyScopeLabel yet",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                        .heightIn(min = 420.dp),
+                    actionLabel = "Go Back",
+                    onAction = { viewModel.navigateBack() }
+                )
             } else {
-                val grouped = notes
-                    .groupBy { n -> n.subjectName.ifBlank { "General" } }
-                    .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-
-                grouped.forEach { (subject, subjectNotes) ->
-                    Text(
-                        text = subject,
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 16.dp, bottom = 8.dp)
-                            .testTag("notes_subject_${subject.replace(Regex("[^A-Za-z0-9]+"), "_")}")
-                    )
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        subjectNotes.forEachIndexed { index, note ->
-                            val isOpening = openingNoteId == note.id
-                            M3StackedListItem(
-                                title = note.title,
-                                supportingText = buildString {
-                                    append(noteSupportingText(note))
-                                    if (note.content.isNotBlank()) {
-                                        if (isNotEmpty()) append(" · ")
-                                        append(note.content)
-                                    }
-                                    if (isOpening) append(" · Opening…")
-                                },
-                                leadingIcon = Icons.Filled.EditNote,
-                                index = index,
-                                totalCount = subjectNotes.size,
-                                testTag = "note_item_${note.id}",
-                                onClick = { viewModel.openNotePdf(note) }
-                            )
-                        }
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    notes.forEachIndexed { index, note ->
+                        val isOpening = openingNoteId == note.id
+                        M3StackedListItem(
+                            title = note.title,
+                            supportingText = buildString {
+                                append(noteSupportingText(note))
+                                if (note.content.isNotBlank()) {
+                                    if (isNotEmpty()) append(" · ")
+                                    append(note.content)
+                                }
+                                if (isOpening) append(" · Opening…")
+                            },
+                            leadingIcon = Icons.Filled.EditNote,
+                            index = index,
+                            totalCount = notes.size,
+                            testTag = "note_item_${note.id}",
+                            onClick = { viewModel.openNotePdf(note) }
+                        )
                     }
                 }
             }

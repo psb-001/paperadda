@@ -14,7 +14,7 @@ import androidx.room.TypeConverters
         SubjectEntity::class,
         PaperEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(StringListConverter::class)

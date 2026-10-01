@@ -6,7 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,11 +31,12 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun M3StackedListItem(
     title: String,
-    supportingText: String = "",
+    supportingText: String,
     leadingIcon: ImageVector,
     index: Int,
     totalCount: Int,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     trailingIcon: ImageVector = Icons.Filled.ChevronRight,
     backgroundColor: Color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -58,18 +59,46 @@ fun M3StackedListItem(
         else -> RoundedCornerShape(8.dp)
     }
 
+    val resolvedBackground = if (enabled) {
+        backgroundColor
+    } else {
+        MaterialTheme.colorScheme.surfaceContainer
+    }
+    val titleColor = if (enabled) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val supportingColor = if (enabled) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
+    val leadingBackground = if (enabled) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHighest
+    }
+    val leadingTint = if (enabled) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.outline
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(72.dp)
+            .heightIn(min = 72.dp)
             .clip(cornerShape)
-            .background(backgroundColor)
+            .background(resolvedBackground)
             .then(if (testTag.isNotEmpty()) Modifier.testTag(testTag) else Modifier)
             .bounceClickable(
+                enabled = enabled,
+                onClickLabel = if (enabled) "Open $title" else null,
                 role = Role.Button,
                 onClick = onClick
             )
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Leading icon in a 40dp primaryContainer circle
@@ -77,14 +106,14 @@ fun M3StackedListItem(
             modifier = Modifier
                 .size(40.dp)
                 .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(leadingBackground),
             contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = leadingIcon,
                 contentDescription = null,
                 modifier = Modifier.size(24.dp),
-                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                tint = leadingTint
             )
         }
 
@@ -97,29 +126,28 @@ fun M3StackedListItem(
             Text(
                 text = title,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
+                color = titleColor,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
-            if (supportingText.isNotBlank()) {
-                Text(
-                    text = supportingText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            Text(
+                text = supportingText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = supportingColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
+        if (enabled) {
+            Spacer(modifier = Modifier.width(8.dp))
 
-        // Trailing Chevron
-        Icon(
-            imageVector = trailingIcon,
-            contentDescription = "Open $title",
-            modifier = Modifier.size(24.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+            Icon(
+                imageVector = trailingIcon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }

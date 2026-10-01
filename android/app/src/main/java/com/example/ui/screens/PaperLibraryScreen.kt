@@ -16,13 +16,16 @@ import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -31,13 +34,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.AcademicYear
+import com.example.data.model.BRANCH_COMMON
 import com.example.data.model.Subject
 import com.example.data.model.branchDisplayName
 import com.example.ui.MainViewModel
+import com.example.ui.components.M3EmptyState
 import com.example.ui.components.M3NavBar
 import com.example.ui.components.M3StackedListItem
 import com.example.ui.components.M3TopBar
 import com.example.ui.components.NavDestination
+import com.example.ui.components.SubjectIcons
 import com.example.ui.navigation.AppScreen
 import com.example.ui.navigation.NavigationDirection
 
@@ -53,8 +59,20 @@ fun PaperLibraryScreen(
     // Branch is already fixed by the previous screen (year selection), so there
     // is deliberately NO branch tab row here — switching branches mid-list
     // caused users to open/download papers from the wrong branch.
-    val subjects = viewModel.getSubjectsForBranchAndYear(branchCode, academicYear)
+    // Re-filtering the whole catalogue on every recomposition was pure waste:
+    // this list only changes when the catalogue revision does.
+    val subjects = remember(branchCode, academicYear, catalogRev) {
+        viewModel.getSubjectsForBranchAndYear(branchCode, academicYear)
+    }
     val yearLabel = AcademicYear.labelFor(academicYear)
+    val isCommon = branchCode.equals(BRANCH_COMMON, ignoreCase = true)
+    val scopeTitle = if (isCommon) yearLabel else branchDisplayName(branchCode)
+    val countText = if (subjects.size == 1) "1 subject" else "${subjects.size} subjects"
+    val scopeSubtitle = if (isCommon) {
+        "Common to all branches · $countText"
+    } else {
+        "$yearLabel · $countText"
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -84,15 +102,21 @@ fun PaperLibraryScreen(
             )
         }
     ) { innerPadding ->
-        Column(
+        // Pull down to re-sync the admin catalog (same path as launch sync).
+        PullToRefreshBox(
+            isRefreshing = viewModel.isSyncing,
+            onRefresh = { viewModel.retrySync() },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
             // Near the top: fixed scope + year header (no tabs — the scope is
             // already chosen, so it cannot be switched by accident here).
             Text(
-                text = branchDisplayName(branchCode),
+                text = scopeTitle,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -102,7 +126,7 @@ fun PaperLibraryScreen(
                     .testTag("subject_branch_title")
             )
             Text(
-                text = "$yearLabel · ${if (subjects.size == 1) "1 subject" else "${subjects.size} subjects"}",
+                text = scopeSubtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier
@@ -112,47 +136,55 @@ fun PaperLibraryScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // In the middle: list of items with 3dp gaps (M3 stacked list)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)
-            ) {
-                subjects.forEachIndexed { index, subject ->
-                    val icon: ImageVector = when (subject.iconName) {
-                        "graphic_eq" -> Icons.Filled.GraphicEq
-                        "memory" -> Icons.Filled.Memory
-                        "cell_tower" -> Icons.Filled.CellTower
-                        "smart_toy" -> Icons.Filled.SmartToy
-                        "computer" -> Icons.Filled.Computer
-                        "language" -> Icons.Filled.Language
-                        else -> Icons.Filled.GraphicEq
+            if (subjects.isEmpty()) {
+                M3EmptyState(
+                    icon = Icons.AutoMirrored.Filled.MenuBook,
+                    title = "No subjects published",
+                    message = "Subjects for $scopeTitle will appear here as soon as an admin publishes them.",
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    actionLabel = "Go Back",
+                    onAction = { viewModel.navigateBack() }
+                )
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    subjects.forEachIndexed { index, subject ->
+                        val icon: ImageVector = SubjectIcons.resolve(
+                            subject.iconName,
+                            subject.name
+                        )
+
+                        M3StackedListItem(
+                            title = subject.name,
+                            supportingText = subject.supportingText,
+                            leadingIcon = icon,
+                            index = index,
+                            totalCount = subjects.size,
+                            testTag = "subject_item_${subject.id}",
+                            onClick = {
+                                viewModel.navigateTo(
+                                    AppScreen.QuestionPapers(
+                                        subjectName = subject.name,
+                                        branchCode = subject.branchCode
+                                    ),
+                                    NavigationDirection.FORWARD
+                                )
+                            }
+                        )
                     }
 
-                    M3StackedListItem(
-                        title = subject.name,
-                        supportingText = subject.supportingText,
-                        leadingIcon = icon,
-                        index = index,
-                        totalCount = subjects.size,
-                        testTag = "subject_item_${subject.id}",
-                        onClick = {
-                            viewModel.navigateTo(
-                                AppScreen.QuestionPapers(
-                                    subjectName = subject.name,
-                                    branchCode = subject.branchCode
-                                ),
-                                NavigationDirection.FORWARD
-                            )
-                        }
-                    )
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
             }
+        }
         }
     }
 }

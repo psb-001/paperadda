@@ -18,6 +18,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -41,6 +42,11 @@ fun YearSelectionScreen(
 ) {
     // Refresh counts when the synced catalog lands.
     val catalogRev by viewModel.catalogRevision.collectAsStateWithLifecycle()
+    val subjectCounts: List<Int> = remember(branchCode, catalogRev) {
+        AcademicYear.BRANCH_ONLY.map { year ->
+            viewModel.getSubjectsForBranchAndYear(branchCode, year.year).size
+        }
+    }
     val branch = viewModel.getBranch(branchCode)
     val branchTitle = branch?.code ?: branchCode
     val branchSubtitle = branch?.fullName ?: branchCode
@@ -103,6 +109,15 @@ fun YearSelectionScreen(
                     .padding(top = 4.dp)
             )
 
+            Text(
+                text = "First Year is common to all branches — open it from Home.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 2.dp)
+            )
+
             Spacer(modifier = Modifier.height(20.dp))
 
             // Years 2–4 only: first year lives on the dedicated Home card.
@@ -111,18 +126,23 @@ fun YearSelectionScreen(
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 AcademicYear.BRANCH_ONLY.forEachIndexed { index, academicYear ->
-                    val subjectCount =
-                        viewModel.getSubjectsForBranchAndYear(branchCode, academicYear.year).size
-                    val countText =
-                        if (subjectCount == 1) "1 subject" else "$subjectCount subjects"
+                    // Hoisted out of composition: this used to re-filter the whole
+                    // catalogue for every year row on every recomposition.
+                    val subjectCount = subjectCounts.getOrElse(index) { 0 }
+                    val availabilityText = when (subjectCount) {
+                        0 -> "No subjects published"
+                        1 -> "1 subject"
+                        else -> "$subjectCount subjects"
+                    }
 
                     M3StackedListItem(
                         title = academicYear.label,
-                        supportingText = "$branchTitle · $countText",
+                        supportingText = "$branchTitle · $availabilityText",
                         leadingIcon = Icons.Filled.School,
                         index = index,
                         totalCount = AcademicYear.BRANCH_ONLY.size,
                         testTag = "year_item_${academicYear.year}",
+                        enabled = subjectCount > 0,
                         onClick = {
                             viewModel.navigateTo(
                                 AppScreen.YearMenu(

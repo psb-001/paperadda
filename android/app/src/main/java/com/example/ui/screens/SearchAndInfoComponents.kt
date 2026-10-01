@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,7 +25,11 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,6 +38,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +49,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -51,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.model.branchDisplayName
 import com.example.ui.MainViewModel
+import com.example.ui.LegalLinks
 import com.example.ui.components.M3StackedListItem
 import com.example.ui.navigation.AppScreen
 import com.example.ui.navigation.NavigationDirection
@@ -84,7 +92,7 @@ fun SearchDialog(
             OutlinedTextField(
                 value = viewModel.searchQuery,
                 onValueChange = { viewModel.onSearchQueryChanged(it) },
-                placeholder = { Text("Search papers, subjects...") },
+                placeholder = { Text("Search papers or subjects…") },
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Filled.Search,
@@ -190,6 +198,7 @@ fun InfoBottomSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState()
+    val uriHandler = LocalUriHandler.current
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -200,6 +209,7 @@ fun InfoBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp)
         ) {
             Row(
@@ -238,7 +248,7 @@ fun InfoBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "PaperAdda allows students in ENTC, AIML, CE, and IT branches to browse, bookmark, and download genuine previous year question papers in PDF format, plus read admin-published study notes.",
+                text = "PaperAdda allows students in ENTC, AIML, CE, and IT branches to browse and download genuine previous year question papers in PDF format, read admin-published study notes, and request missing content.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -247,11 +257,163 @@ fun InfoBottomSheet(
 
             Text(
                 text = "• ENTC: Electronics and Telecommunication\n• AIML: Artificial Intelligence & Machine Learning\n• CE: Computer Engineering\n• IT: Information Technology",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "Built by",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Lead — prominent card so the founder stands out.
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ),
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Prathamesh Bhujbal",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "Founder & Lead Developer",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { uriHandler.openUri("https://github.com/psb-001") }) {
+                            Text("GitHub")
+                        }
+                        TextButton(onClick = {
+                            uriHandler.openUri("https://www.linkedin.com/in/prathamesh-bhujbal-psb?utm_source=share_via&utm_content=profile&utm_medium=member_android")
+                        }) {
+                            Text("LinkedIn")
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            TeamMemberRow(
+                name = "Atharv Chougule",
+                role = "Contributor",
+                githubUrl = "https://github.com/Atharv-052007",
+                linkedinUrl = "https://www.linkedin.com/in/atharv-chougule-626452393?utm_source=share_via&utm_content=profile&utm_medium=member_android"
+            )
+            TeamMemberRow(
+                name = "Aayush Kandhare",
+                role = "Contributor",
+                githubUrl = "https://github.com/Imaayushh",
+                linkedinUrl = "https://www.linkedin.com/in/aayush-kandhare-32646538b?utm_source=share_via&utm_content=profile&utm_medium=member_android"
+            )
+            TeamMemberRow(
+                name = "Ayush Nimbhare",
+                role = "Contributor",
+                githubUrl = "https://github.com/AyushNimbhare",
+                linkedinUrl = "https://www.linkedin.com/in/ayush-nimbhare-5770532bb?utm_source=share_via&utm_content=profile&utm_medium=member_android"
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "Legal",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Text(
+                text = LegalLinks.COPYRIGHT_NOTICE,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(4.dp))
+
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { uriHandler.openUri(LegalLinks.PRIVACY_POLICY) }) {
+                    Text("Privacy Policy")
+                }
+                TextButton(onClick = { uriHandler.openUri(LegalLinks.TERMS_AND_COPYRIGHT) }) {
+                    Text("Terms & Copyright")
+                }
+                TextButton(onClick = { uriHandler.openUri(LegalLinks.DELETE_DATA) }) {
+                    Text("Delete my data")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // PaperAdda is shared as an APK, so nothing tells a user's phone a
+            // newer build exists. This is the manual escape hatch for that.
+            Text(
+                text = "Version ${viewModel.installedVersionName} " +
+                    "(build ${viewModel.installedVersionCode})",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            TextButton(
+                onClick = { viewModel.checkForUpdateManually() },
+                enabled = !viewModel.isCheckingForUpdate
+            ) {
+                if (viewModel.isCheckingForUpdate) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Checking…")
+                } else {
+                    Icon(Icons.Filled.SystemUpdateAlt, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Check for updates")
+                }
+            }
+
+            viewModel.updateMessage?.let { message ->
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            viewModel.availableUpdate?.let { release ->
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Version ${release.version} is available",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { viewModel.openUpdateDialog() }) {
+                        Text("Update")
+                    }
+                }
+            }
 
             Button(
                 onClick = onDismiss,
@@ -264,6 +426,47 @@ fun InfoBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+/**
+ * Compact contributor row: name + role with GitHub/LinkedIn connect links.
+ * Opens in the system browser via [LocalUriHandler] (no extra permissions).
+ */
+@Composable
+private fun TeamMemberRow(
+    name: String,
+    role: String,
+    githubUrl: String,
+    linkedinUrl: String,
+    modifier: Modifier = Modifier
+) {
+    val uriHandler = LocalUriHandler.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = role,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        TextButton(onClick = { uriHandler.openUri(githubUrl) }) {
+            Text("GitHub")
+        }
+        TextButton(onClick = { uriHandler.openUri(linkedinUrl) }) {
+            Text("LinkedIn")
         }
     }
 }

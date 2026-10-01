@@ -11,18 +11,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.LibraryBooks
+import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.filled.NoteAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.AcademicYear
 import com.example.data.model.branchDisplayName
 import com.example.ui.MainViewModel
@@ -46,6 +49,29 @@ fun YearMenuScreen(
 ) {
     val yearLabel = AcademicYear.labelFor(academicYear)
     val scopeLabel = branchDisplayName(branchCode)
+    val notes by viewModel.notes.collectAsStateWithLifecycle()
+    // Refresh counts when the synced catalog lands.
+    val catalogRev by viewModel.catalogRevision.collectAsStateWithLifecycle()
+    val subjectCount = remember(branchCode, academicYear, catalogRev) {
+        viewModel.getSubjectsForBranchAndYear(branchCode, academicYear).size
+    }
+    val noteCount = notes.count { n ->
+        n.academicYear == academicYear &&
+            (
+                academicYear == 1 ||
+                    n.branchCode.equals(branchCode, ignoreCase = true)
+                )
+    }
+    val subjectAvailability = when (subjectCount) {
+        0 -> "No subjects published"
+        1 -> "1 subject · previous year papers"
+        else -> "$subjectCount subjects · previous year papers"
+    }
+    val noteAvailability = when (noteCount) {
+        0 -> "No notes published yet"
+        1 -> "1 note · admin published"
+        else -> "$noteCount notes · admin published"
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -113,10 +139,12 @@ fun YearMenuScreen(
             ) {
                 M3StackedListItem(
                     title = "Question Papers",
-                    leadingIcon = Icons.Filled.LibraryBooks,
+                    supportingText = subjectAvailability,
+                    leadingIcon = Icons.AutoMirrored.Filled.LibraryBooks,
                     index = 0,
                     totalCount = 2,
                     testTag = "year_menu_papers",
+                    enabled = subjectCount > 0,
                     onClick = {
                         viewModel.navigateTo(
                             AppScreen.PaperLibrary(
@@ -129,10 +157,12 @@ fun YearMenuScreen(
                 )
                 M3StackedListItem(
                     title = "Study Notes",
+                    supportingText = noteAvailability,
                     leadingIcon = Icons.Filled.NoteAlt,
                     index = 1,
                     totalCount = 2,
                     testTag = "year_menu_notes",
+                    enabled = noteCount > 0,
                     onClick = {
                         viewModel.navigateTo(
                             AppScreen.YearNotes(

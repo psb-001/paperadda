@@ -12,14 +12,12 @@ import kotlinx.coroutines.withContext
  * remote list (full replace on sync, so admin deletions propagate too).
  * The note body lives in Supabase Storage ([NoteEntity.storagePath]);
  * [NoteEntity.content] is only an optional list description.
- * Starts empty — content only appears after an admin publishes it.
  */
 class NoteRepository(
     private val noteDao: NoteDao
 ) {
     val notes: Flow<List<NoteEntity>> = noteDao.getAllNotes()
 
-    /** Mirror the remote list locally. False when offline — old cache kept. */
     suspend fun refreshFromRemote(remote: SupabaseRemoteDataSource): Boolean =
         withContext(Dispatchers.IO) {
             try {
@@ -27,6 +25,7 @@ class NoteRepository(
                 noteDao.clear()
                 noteDao.insertAll(remoteNotes.map {
                     NoteEntity(
+                        id = it.id ?: 0L,
                         title = it.title,
                         content = it.content,
                         subjectName = it.subjectName,

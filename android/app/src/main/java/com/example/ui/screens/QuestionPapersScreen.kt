@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -17,11 +18,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.ui.MainViewModel
+import com.example.ui.components.M3EmptyState
 import com.example.ui.components.M3NavBar
 import com.example.ui.components.M3StackedListItem
 import com.example.ui.components.M3TopBar
@@ -38,7 +41,10 @@ fun QuestionPapersScreen(
 ) {
     // Re-read the catalog when a sync lands.
     val catalogRev by viewModel.catalogRevision.collectAsStateWithLifecycle()
-    val papers = viewModel.getPapersForSubject(subjectName, branchCode)
+    // Same reasoning as the subject list: only recompute when the catalogue does.
+    val papers = remember(subjectName, branchCode, catalogRev) {
+        viewModel.getPapersForSubject(subjectName, branchCode)
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -76,24 +82,37 @@ fun QuestionPapersScreen(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            papers.forEachIndexed { index, paper ->
-                M3StackedListItem(
-                    title = paper.title,
-                    supportingText = paper.supportingText,
-                    leadingIcon = Icons.Filled.Description,
-                    index = index,
-                    totalCount = papers.size,
-                    testTag = "paper_item_${paper.id}",
-                    onClick = {
-                        viewModel.navigateTo(
-                            AppScreen.PaperDetails(paper.id),
-                            NavigationDirection.FORWARD
-                        )
-                    }
+            if (papers.isEmpty()) {
+                M3EmptyState(
+                    icon = Icons.Filled.Description,
+                    title = "No question papers yet",
+                    message = "Papers for $subjectName will appear here as soon as an admin publishes them.",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 480.dp),
+                    actionLabel = "Go Back",
+                    onAction = { viewModel.navigateBack() }
                 )
-            }
+            } else {
+                papers.forEachIndexed { index, paper ->
+                    M3StackedListItem(
+                        title = paper.displayTitle,
+                        supportingText = paper.supportingText,
+                        leadingIcon = Icons.Filled.Description,
+                        index = index,
+                        totalCount = papers.size,
+                        testTag = "paper_item_${paper.id}",
+                        onClick = {
+                            viewModel.navigateTo(
+                                AppScreen.PaperDetails(paper.id),
+                                NavigationDirection.FORWARD
+                            )
+                        }
+                    )
+                }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
 }

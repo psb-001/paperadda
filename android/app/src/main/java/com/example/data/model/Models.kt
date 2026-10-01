@@ -32,7 +32,8 @@ data class Subject(
             } else {
                 branchCode
             }
-            return "$scope · $paperCount question papers"
+            val paperLabel = if (paperCount == 1) "question paper" else "question papers"
+            return "$scope · $paperCount $paperLabel"
         }
 }
 
@@ -65,12 +66,33 @@ data class QuestionPaper(
     val year: String, // "2025"
     val examType: String, // "End Semester Examination"
     val fileFormat: String = "PDF",
-    val fileSize: String = "2.4 MB",
-    val duration: String = "3 Hours",
-    val maxMarks: Int = 100,
+    val fileSize: String = "",
+    val duration: String = "",
+    val maxMarks: Int = 0,
     val sampleQuestions: List<String> = emptyList(),
-    val storagePath: String = "" // Supabase Storage path; empty = generate locally
+    val storagePath: String = "" // Supabase Storage path; empty = no PDF uploaded
 ) {
+    /**
+     * Title without a leading copy of the subject name. Admins often type
+     * "PPS (Programming for Problem Solving) - End Semester 2025" while the
+     * subject is already shown as the screen heading, so the prefix would
+     * render twice. Falls back to the raw title when nothing is left.
+     */
+    val displayTitle: String
+        get() {
+            var rest = title.trim()
+            val prefixes = listOf(subjectName.trim())
+                .filter { it.isNotEmpty() }
+                .sortedByDescending { it.length }
+            for (prefix in prefixes) {
+                if (rest.startsWith(prefix, ignoreCase = true)) {
+                    rest = rest.removePrefix(prefix).trimStart(' ', '-', '—', '–', ':', '|', ',')
+                    if (rest.isNotEmpty()) return rest
+                }
+            }
+            return title.trim()
+        }
+
     val supportingText: String
         get() {
             val scope = if (branchCode.equals(BRANCH_COMMON, ignoreCase = true)) {

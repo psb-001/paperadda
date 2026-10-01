@@ -24,3 +24,15 @@
 -keep @androidx.room.Dao class *
 -keep @androidx.room.Database class *
 -dontwarn androidx.room.**
+
+# --- PDFBox (PDF engine) ---
+# JPX/JPEG-2000 images inside a PDF need an optional codec that is not on the
+# classpath. PDFBox degrades gracefully: those images are skipped, everything
+# else on the page (all the vector text, which is what these papers are made of)
+# still renders and still searches. Without this rule R8 fails the build.
+-dontwarn com.gemalto.jp2.**
+
+# PDFBox resolves font files and rendering classes at runtime.
+-keep class com.tom_roush.pdfbox.** { *; }
+-keep class com.tom_roush.fontbox.** { *; }
+-dontwarn com.tom_roush.**

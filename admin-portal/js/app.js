@@ -11,14 +11,23 @@ const state = {
   subjects: [],
   papers: [],
   notes: [],
+  requests: [],
+  feedback: [],
+  requestLoadError: "",
+  feedbackLoadError: "",
   paperFilter: { branch: "", q: "" },
   subjectFilter: { branch: "", year: "" },
   noteFilter: { branch: "", subject: "", q: "" },
+  requestFilter: { status: "", kind: "", branch: "", q: "" },
+  feedbackFilter: { status: "", category: "", q: "" },
   selectedPapers: new Set(),
   selectedNotes: new Set(),
   selectedSubjects: new Set(),
   pendingFile: null,
+  bulkFiles: [],
+  bulk: {},
 };
+const BULK_MAX_FILES = 50;
 
 /* ---------------- helpers ---------------- */
 const $ = (sel) => document.querySelector(sel);
@@ -49,6 +58,10 @@ function savePrefs(p) {
   localStorage.setItem(PREFS_KEY, JSON.stringify({ ...loadPrefs(), ...p }));
 }
 
+function isSessionError(error) {
+  return /session expired|not logged in/i.test(String(error && error.message || error || ""));
+}
+
 function toast(msg, kind) {
   const el = document.createElement("div");
   el.className = "toast" + (kind ? " " + kind : "");
@@ -65,6 +78,7 @@ function openModal(title, bodyHTML, buttons) {
   (buttons || [{ label: "Close" }]).forEach((b) => {
     const btn = document.createElement("button");
     btn.className = "btn " + (b.kind || "secondary");
+    if (b.id) btn.id = b.id;
     btn.textContent = b.label;
     btn.onclick = async () => {
       try {
@@ -174,11 +188,13 @@ async function bootApp() {
     await reloadAll();
   } catch (err) {
     showLogin();
-    $("#loginError").textContent = "Session expired — please sign in again.";
+    $("#loginError").textContent = isSessionError(err)
+      ? "Session expired — please sign in again."
+      : (err.message || "Could not load the portal.");
     return;
   }
-  const s = JSON.parse(localStorage.getItem("pyq-admin-session") || "{}");
-  $("#adminEmail").textContent = s.email || "";
+  const s = JSON.parse(localStorage.getItem("paperadda-admin-session") || "{}");
+  $("#adminEmail").textContent = s.displayName ? s.displayName + " · " + (s.email || "") : (s.email || "");
   toast("Connected to Supabase", "ok");
   switchView("dashboard");
 }
@@ -187,12 +203,32 @@ async function reloadAll() {
   const [subjects, papers, notes] = await Promise.all([
     DB.getAll("subjects"), DB.getAll("papers"), DB.getAll("notes"),
   ]);
+  let requests = [];
+  let requestLoadError = "";
+  try {
+    requests = await DB.listAllRequests();
+  } catch (err) {
+    if (isSessionError(err)) throw err;
+    requestLoadError = err.message || "Could not load requests";
+  }
+  let feedback = [];
+  let feedbackLoadError = "";
+  try {
+    feedback = await DB.listAllFeedback();
+  } catch (err) {
+    if (isSessionError(err)) throw err;
+    feedbackLoadError = err.message || "Could not load feedback";
+  }
   state.subjects = subjects.sort((a, b) =>
     a.branchCode.localeCompare(b.branchCode) ||
     a.academicYear - b.academicYear ||
     a.name.localeCompare(b.name));
   state.papers = papers.sort((a, b) => String(b.year).localeCompare(String(a.year)));
   state.notes = notes.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  state.requests = requests.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  state.requestLoadError = requestLoadError;
+  state.feedback = feedback.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  state.feedbackLoadError = feedbackLoadError;
 }
 
 function switchView(view) {
@@ -206,6 +242,8 @@ function switchView(view) {
     papers: renderPapers,
     subjects: renderSubjects,
     notes: renderNotes,
+    requests: renderRequests,
+    feedback: renderFeedback,
     data: renderData,
   })[view]();
 }
@@ -221,9 +259,8 @@ async function renderDashboard() {
   $("#viewSubtitle").textContent = "Pick an action — the app updates as soon as you save";
   $("#topbarActions").innerHTML = "";
 
-  const pdfsLive =
-    state.papers.filter((p) => p.fileId).length +
-    state.notes.filter((n) => n.storagePath).length;
+  const pendingRequests = state.requests.filter((r) => r.status === "pending").length;
+  const newFeedback = state.feedback.filter((f) => f.status === "new").length;
   const recent = [
     ...state.papers.filter((p) => p.uploadedAt).map((p) => ({
       kind: "Paper", title: p.title, meta: `${p.branchCode} · ${p.subjectName} · ${p.year}`, at: p.uploadedAt, hasPdf: !!p.fileId,
@@ -238,7 +275,12 @@ async function renderDashboard() {
       <button class="action-tile" id="tilePaper">
         <div class="tile-ico">📄</div>
         <h3>Upload paper</h3>
-        <p>Drop a PYQ PDF → branch, subject, year → save</p>
+        <p>Drop a question-paper PDF → branch, subject, year → save</p>
+      </button>
+      <button class="action-tile" id="tileBulk">
+        <div class="tile-ico">🗂</div>
+        <h3>Bulk upload</h3>
+        <p>Add a whole batch of question-paper PDFs in one go</p>
       </button>
       <button class="action-tile" id="tileNote">
         <div class="tile-ico">📝</div>
@@ -250,13 +292,24 @@ async function renderDashboard() {
         <h3>Add subject</h3>
         <p>New subject under a branch &amp; year</p>
       </button>
+      <button class="action-tile" id="tileRequests">
+        <div class="tile-ico">✉</div>
+        <h3>Review requests</h3>
+        <p>See what students need and update its status</p>
+      </button>
+      <button class="action-tile" id="tileFeedback">
+        <div class="tile-ico">💬</div>
+        <h3>Read feedback</h3>
+        <p>See what users report and follow up on issues</p>
+      </button>
     </div>
 
     <div class="cards">
       <div class="card"><div class="stat-num">${state.subjects.length}</div><div class="stat-label">Subjects</div></div>
       <div class="card"><div class="stat-num">${state.papers.length}</div><div class="stat-label">Question papers</div></div>
       <div class="card"><div class="stat-num">${state.notes.length}</div><div class="stat-label">Study notes</div></div>
-      <div class="card"><div class="stat-num">${pdfsLive}</div><div class="stat-label">PDFs in cloud</div></div>
+      <div class="card"><div class="stat-num">${pendingRequests}</div><div class="stat-label">Pending requests</div></div>
+      <div class="card"><div class="stat-num">${newFeedback}</div><div class="stat-label">New feedback</div></div>
     </div>
 
     <div class="panel">
@@ -276,6 +329,8 @@ async function renderDashboard() {
   $("#tilePaper").addEventListener("click", () => openPaperModal(null));
   $("#tileNote").addEventListener("click", () => openNoteModal(null));
   $("#tileSubject").addEventListener("click", () => openSubjectModal(null));
+  $("#tileRequests").addEventListener("click", () => switchView("requests"));
+  $("#tileFeedback").addEventListener("click", () => switchView("feedback"));
 }
 
 /* ============================================================
@@ -284,8 +339,11 @@ async function renderDashboard() {
 function renderPapers() {
   $("#viewTitle").textContent = "Papers";
   $("#viewSubtitle").textContent = "Question papers students open from the app";
-  $("#topbarActions").innerHTML = `<button class="btn" id="btnUpload">+ Upload paper</button>`;
+  $("#topbarActions").innerHTML =
+    `<button class="btn" id="btnUpload">+ Upload paper</button>` +
+    `<button class="btn secondary" id="btnBulkUpload">Bulk upload</button>`;
   $("#btnUpload").addEventListener("click", () => openPaperModal(null));
+  $("#btnBulkUpload").addEventListener("click", () => openBulkPaperModal());
 
   const f = state.paperFilter;
   const branchOpts = [`<option value="">All branches</option>`,
@@ -395,8 +453,8 @@ function openPaperModal(existing) {
     title: "",
     examType: "End Semester Examination",
     year: String(new Date().getFullYear()),
-    duration: "3 Hours",
-    maxMarks: 100,
+    duration: "",
+    maxMarks: 0,
     fileFormat: "PDF",
     fileSize: "",
     sampleQuestions: [],
@@ -419,15 +477,19 @@ function openPaperModal(existing) {
       </div>
     </div>
     <div class="field"><label>Paper title <span class="muted">(optional — auto if empty)</span></label>
-      <input id="mTitle" value="${esc(p.title)}" placeholder="auto: subject + exam type + year" />
+      <input id="mTitle" value="${esc(p.title)}" placeholder="auto: exam type + year" />
     </div>
 
     <button type="button" class="adv-toggle" id="advToggle">▸ More options (duration, marks…)</button>
     <div class="adv-fields" id="advFields" hidden>
       <div class="field-row">
-        <div class="field"><label>Duration</label><input id="mDuration" value="${esc(p.duration || "3 Hours")}" /></div>
-        <div class="field"><label>Max marks</label><input id="mMarks" type="number" value="${p.maxMarks || 100}" /></div>
+        <div class="field"><label>Duration</label>
+          <input id="mDuration" value="${esc(p.duration || "")}" placeholder="e.g. 3 Hours" /></div>
+        <div class="field"><label>Max marks</label>
+          <input id="mMarks" type="number" min="0" value="${Number(p.maxMarks) > 0 ? Number(p.maxMarks) : ""}" placeholder="e.g. 70" /></div>
       </div>
+      <p class="hint">Check the actual question paper. Leave blank if you are not sure — the app
+        hides these instead of showing a guessed number.</p>
       <div class="field"><label>Sample questions (one per line)</label>
         <textarea id="mSamples" rows="3">${esc((p.sampleQuestions || []).join("\n"))}</textarea>
       </div>
@@ -491,7 +553,10 @@ async function savePaper(existing) {
   if (!subjectName) { toast("Pick a subject (add one from Subjects if missing)", "err"); return; }
   if (!year) { toast("Exam year is required", "err"); return; }
   if (!title) {
-    title = `${subjectName} — ${examType} ${year}`;
+    // The app already shows the subject as the screen heading, so the stored
+    // title must not repeat it — that produced "PPS (Programming for Problem
+    // Solving) - End Semester 2025" under a heading that said the same thing.
+    title = `${examType} ${year}`;
   }
 
   let id = existing ? existing.id
@@ -515,8 +580,8 @@ async function savePaper(existing) {
     branchCode,
     year,
     examType,
-    duration: advOpen ? $("#mDuration").value.trim() : (existing?.duration || "3 Hours"),
-    maxMarks: advOpen ? (parseInt($("#mMarks").value, 10) || 100) : (existing?.maxMarks || 100),
+    duration: advOpen ? $("#mDuration").value.trim() : (existing?.duration || ""),
+    maxMarks: advOpen ? (parseInt($("#mMarks").value, 10) || 0) : (existing?.maxMarks || 0),
     fileFormat: "PDF",
     fileSize: existing ? (existing.fileSize || "") : "",
     sampleQuestions: samples,
@@ -543,6 +608,348 @@ async function savePaper(existing) {
   toast(existing ? "Paper updated" : "Paper published", "ok");
   await reloadAll();
   renderPapers();
+}
+
+/* ============================================================
+ * BULK PAPER UPLOAD — one form for a whole batch of PDFs
+ * ============================================================ */
+
+/**
+ * Pulls an exam year out of a file name so a mixed batch (2024, 2025, 2026)
+ * does not need typing per file. Looks for a 4-digit year in a believable
+ * range and prefers the last one, because names usually end with the year
+ * ("PPS_ESE_2025", "final-2024-scheme").
+ */
+function detectYearFromFilename(name) {
+  // No \b: a word boundary does not exist after "_", which is most filenames.
+  // Take every 4-digit run in a plausible exam range and prefer the last one,
+  // because names usually end with the year ("PPS_ESE_2025", "final-2024").
+  const runs = String(name || "").match(/\d{4}/g) || [];
+  const plausible = runs.filter((r) => {
+    const n = Number(r);
+    return n >= 2010 && n <= 2035;
+  });
+  return plausible.length ? plausible[plausible.length - 1] : "";
+}
+
+/** "PPS_ESE_2025 (copy).pdf" -> "PPS ESE 2025 (copy)" */
+function titleFromFilename(name) {
+  return String(name || "")
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[_\-.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function openBulkPaperModal() {
+  const prefs = loadPrefs();
+  const thisYear = String(new Date().getFullYear());
+  state.bulkFiles = [];
+  state.bulk = {
+    branchCode: prefs.branch || "ENTC",
+    detectYear: true,
+    titleMode: "auto", // "auto" = exam type + year, "filename" = file name
+    year: thisYear,
+    done: false,
+  };
+
+  openModal("Bulk upload papers", `
+    <div class="field-row">
+      <div class="field"><label>Branch</label>
+        <select id="bBranch">${BRANCHES.map((b) =>
+          `<option value="${b.code}" ${b.code === state.bulk.branchCode ? "selected" : ""}>${b.code} — ${esc(b.fullName)}</option>`).join("")}</select>
+      </div>
+      <div class="field"><label>Subject</label><select id="bSubject"></select></div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Exam type</label>
+        <select id="bExamType">
+          ${["End Semester Examination", "Mid Semester Examination", "Unit Test", "Other"].map((t) =>
+            `<option ${t === "End Semester Examination" ? "selected" : ""}>${t}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field"><label>Fallback year</label>
+        <input id="bYear" value="${thisYear}" />
+        <p class="hint">Used when a file name has no year.</p>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field"><label>Duration <span class="muted">(optional)</span></label>
+        <input id="bDuration" placeholder="e.g. 3 Hours" /></div>
+      <div class="field"><label>Max marks <span class="muted">(optional)</span></label>
+        <input id="bMarks" type="number" min="0" placeholder="e.g. 70" /></div>
+    </div>
+    <p class="hint">Leave marks and duration blank unless you are sure — the app hides
+      fields that were never set rather than showing a guess.</p>
+
+    <div class="field">
+      <label>PDF files</label>
+      <div class="dropzone" id="bDrop">
+        <strong>Drop PDFs here (many at once) or browse</strong>
+        <span class="dz-hint">Up to ${BULK_MAX_FILES} files · every file uses the settings above</span>
+        <input type="file" id="bFiles" accept="application/pdf,.pdf" multiple hidden />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Options</label>
+      <label class="check"><input type="checkbox" id="bDetectYear" checked />
+        Read the exam year from each file name</label>
+      <label class="check"><input type="radio" name="bTitleMode" value="auto" checked />
+        Titles: exam type + year</label>
+      <label class="check"><input type="radio" name="bTitleMode" value="filename" />
+        Titles: use the file name</label>
+    </div>
+
+    <div id="bSummary"></div>
+  `, [
+    { label: "Cancel", kind: "secondary" },
+    { label: "Upload all", id: "bGo", keepOpen: true, onClick: () => runBulkUpload() },
+  ]);
+
+  const branchSel = $("#bBranch"), subjectSel = $("#bSubject");
+  const refreshSubjects = () => {
+    subjectSel.innerHTML = subjectSelectOptions(branchSel.value);
+  };
+  branchSel.addEventListener("change", () => { refreshSubjects(); savePrefs({ branch: branchSel.value }); });
+  refreshSubjects();
+  savePrefs({ branch: state.bulk.branchCode });
+
+  wireBulkModal();
+  renderBulkRows();
+}
+
+/** Adds chosen files, ignoring duplicates and non-PDFs. */
+function addBulkFiles(fileList) {
+  const incoming = Array.from(fileList || []);
+  const skipped = { dup: 0, type: 0, full: 0 };
+  for (const f of incoming) {
+    const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+    if (!isPdf) { skipped.type++; continue; }
+    const already = state.bulkFiles.some((b) =>
+      b.file.name === f.name && b.file.size === f.size);
+    if (already) { skipped.dup++; continue; }
+    if (state.bulkFiles.length >= BULK_MAX_FILES) { skipped.full++; continue; }
+    state.bulkFiles.push({ file: f, year: "", title: "", status: "pending", error: "" });
+  }
+  applyBulkDefaults();
+  renderBulkRows();
+  const notes = [];
+  if (skipped.type) notes.push(`${skipped.type} non-PDF skipped`);
+  if (skipped.dup) notes.push(`${skipped.dup} duplicate skipped`);
+  if (skipped.full) notes.push(`limit of ${BULK_MAX_FILES} reached`);
+  if (notes.length) toast(notes.join(" · "), "err");
+}
+
+/** Fills each row's year/title from the shared settings, without clobbering edits. */
+function applyBulkDefaults() {
+  const examType = ($("#bExamType") || {}).value || "End Semester Examination";
+  const fallbackYear = (($("#bYear") || {}).value || "").trim();
+  const detect = ($("#bDetectYear") || {}).checked;
+  const mode = (document.querySelector('input[name="bTitleMode"]:checked') || {}).value || "auto";
+  for (const row of state.bulkFiles) {
+    if (row.yearTouched) continue;
+    // Detection on: use the year from the file name, and leave it blank if
+    // there is none so the upload reports it, rather than quietly stamping
+    // today's year onto an old paper. Detection off: use the fallback year.
+    row.year = detect ? detectYearFromFilename(row.file.name) : fallbackYear;
+    if (row.titleTouched) continue;
+    row.title = mode === "filename" ? titleFromFilename(row.file.name)
+      : (row.year ? `${examType} ${row.year}` : examType);
+  }
+}
+
+function renderBulkRows() {
+  const box = $("#bBulkRows");
+  if (!box) return;
+  const total = state.bulkFiles.reduce((n, b) => n + b.file.size, 0);
+  const done = state.bulkFiles.filter((b) => b.status === "done").length;
+  const failed = state.bulkFiles.filter((b) => b.status === "failed").length;
+
+  $("#bSummary").innerHTML = state.bulkFiles.length === 0 ? "" : `
+    <p class="hint">${state.bulkFiles.length} file(s) · ${esc(fmtBytes(total))}
+      ${failed ? ` · <span style="color:var(--error)">${failed} failed</span>` : ""}
+      ${done ? ` · <span style="color:var(--success)">${done} uploaded</span>` : ""}</p>`;
+
+  if (state.bulkFiles.length === 0) {
+    box.innerHTML = `<p class="hint">No files chosen yet.</p>`;
+    return;
+  }
+
+  box.innerHTML = `<div class="bulk-list">` + state.bulkFiles.map((row, i) => `
+    <div class="bulk-row" data-bulk-idx="${i}">
+      <div class="bulk-row-main">
+        <div class="bulk-file" title="${esc(row.file.name)}">📄 ${esc(row.file.name)}</div>
+        <div class="bulk-sub">${esc(fmtBytes(row.file.size))}</div>
+      </div>
+      <div class="bulk-row-fields">
+        <input data-bulk-year="${i}" value="${esc(row.year)}" placeholder="Year" title="Exam year for this file" />
+        <input data-bulk-title="${i}" value="${esc(row.title)}" placeholder="Title" title="Title for this file" />
+      </div>
+      <div class="bulk-row-actions">
+        <span class="bulk-status ${row.status}">${bulkStatusLabel(row.status)}</span>
+        ${row.status === "pending"
+          ? `<button type="button" class="icon-btn danger" data-bulk-remove="${i}" title="Remove">✕</button>`
+          : `<button type="button" class="icon-btn" data-bulk-retry="${i}" title="Retry">↻</button>`}
+      </div>
+      ${row.error ? `<div class="bulk-error">${esc(row.error)}</div>` : ""}
+    </div>`).join("") + `</div>`;
+
+  box.querySelectorAll("[data-bulk-year]").forEach((el) => {
+    const idx = Number(el.getAttribute("data-bulk-year"));
+    el.addEventListener("input", () => {
+      const row = state.bulkFiles[idx];
+      if (!row) return;
+      row.year = el.value.trim();
+      row.yearTouched = true;
+      renderBulkRows();
+      const again = box.querySelector(`[data-bulk-year="${idx}"]`);
+      if (again) {
+        again.focus();
+        again.setSelectionRange(again.value.length, again.value.length);
+      }
+    });
+  });
+  box.querySelectorAll("[data-bulk-title]").forEach((el) => {
+    const idx = Number(el.getAttribute("data-bulk-title"));
+    el.addEventListener("input", () => {
+      const row = state.bulkFiles[idx];
+      if (!row) return;
+      row.title = el.value;
+      row.titleTouched = true;
+    });
+  });
+  box.querySelectorAll("[data-bulk-remove]").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.bulkFiles.splice(Number(b.getAttribute("data-bulk-remove")), 1);
+      renderBulkRows();
+    }));
+  box.querySelectorAll("[data-bulk-retry]").forEach((b) => {
+    const idx = Number(b.getAttribute("data-bulk-retry"));
+    b.addEventListener("click", () => {
+      const row = state.bulkFiles[idx];
+      if (!row) return;
+      row.status = "pending";
+      row.error = "";
+      renderBulkRows();
+    });
+  });
+}
+
+function bulkStatusLabel(status) {
+  return { pending: "waiting", uploading: "uploading…", done: "done", failed: "failed" }[status] || status;
+}
+
+function wireBulkModal() {
+  const drop = $("#bDrop");
+  const input = $("#bFiles");
+  drop.addEventListener("click", () => input.click());
+  input.addEventListener("change", () => { addBulkFiles(input.files); input.value = ""; });
+  ["dragenter", "dragover"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) =>
+    drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => addBulkFiles(e.dataTransfer.files));
+
+  ["#bExamType", "#bYear", "#bDetectYear"].forEach((sel) => {
+    const el = $(sel);
+    if (el) el.addEventListener("input", () => { applyBulkDefaults(); renderBulkRows(); });
+  });
+  document.querySelectorAll('input[name="bTitleMode"]').forEach((r) =>
+    r.addEventListener("change", () => {
+      for (const row of state.bulkFiles) row.titleTouched = false;
+      applyBulkDefaults();
+      renderBulkRows();
+    }));
+
+  const host = document.createElement("div");
+  host.id = "bBulkRows";
+  $("#bSummary").insertAdjacentElement("afterend", host);
+}
+
+/**
+ * Uploads every pending file, one at a time so a slow connection cannot
+ * starve the portal. A failure marks that row and the batch carries on, so one
+ * bad PDF never costs you the other nine.
+ */
+async function runBulkUpload() {
+  const branchCode = $("#bBranch").value;
+  const subjectName = $("#bSubject").value;
+  const examType = $("#bExamType").value;
+  const duration = $("#bDuration").value.trim();
+  const maxMarks = parseInt($("#bMarks").value, 10) || 0;
+
+  if (!subjectName) { toast("Pick a subject for the whole batch", "err"); return; }
+  const queued = state.bulkFiles.filter((b) => b.status === "pending");
+  if (queued.length === 0) { toast("Add some PDF files first", "err"); return; }
+
+  const goBtn = $("#bGo");
+  if (goBtn) { goBtn.disabled = true; goBtn.textContent = "Uploading…"; }
+
+  // Ids must not collide with existing papers or with each other in this batch.
+  const used = new Set(state.papers.map((p) => p.id));
+  const base = slug(branchCode + "_" + subjectName);
+  let uploaded = 0;
+
+  for (const row of queued) {
+    const year = (row.year || "").trim();
+    if (!year) {
+      row.status = "failed";
+      row.error = "No exam year — set one for this file";
+      continue;
+    }
+    let id = base + "_" + slug(year);
+    let n = 2;
+    while (used.has(id)) id = base + "_" + slug(year) + "_" + (n++);
+    used.add(id);
+
+    row.status = "uploading";
+    row.error = "";
+    renderBulkRows();
+    try {
+      const path = id + ".pdf";
+      await DB.putFile(path, row.file);
+      await DB.put("papers", {
+        id,
+        title: (row.title || "").trim() || `${examType} ${year}`,
+        subjectName,
+        branchCode,
+        year,
+        examType,
+        duration,
+        maxMarks,
+        fileFormat: "PDF",
+        fileSize: fmtBytes(row.file.size),
+        sampleQuestions: [],
+        fileId: path,
+        fileName: row.file.name,
+        uploadedAt: Date.now(),
+      });
+      row.status = "done";
+      uploaded++;
+    } catch (err) {
+      row.status = "failed";
+      row.error = err.message || "Upload failed";
+    }
+    renderBulkRows();
+  }
+
+  savePrefs({ branch: branchCode });
+  await reloadAll();
+  state.bulk.done = true;
+  if (goBtn) { goBtn.disabled = false; goBtn.textContent = "Upload all"; }
+  renderBulkRows();
+  renderPapers();
+
+  // Count from the final state: a row that had no usable year fails before the
+  // try block, so it never reaches the `failed` list.
+  const failedCount = state.bulkFiles.filter((b) => b.status === "failed").length;
+  if (failedCount === 0) {
+    toast(`${uploaded} paper(s) published`, "ok");
+    closeModal();
+  } else {
+    toast(`${uploaded} published, ${failedCount} failed — fix and retry`, "err");
+  }
 }
 
 async function deletePaper(id) {
@@ -633,7 +1040,7 @@ function renderSubjects() {
               const n = papersOfSubject(s.branchCode, s.name).length;
               return `<tr class="${state.selectedSubjects.has(s.id) ? "row-selected" : ""}">
                 <td class="col-check"><input type="checkbox" data-check="${esc(s.id)}" ${state.selectedSubjects.has(s.id) ? "checked" : ""} aria-label="Select ${esc(s.name)}" /></td>
-                <td><b>${esc(s.name)}</b></td>
+                <td><span class="subj-cell">${iconPreview(ICON_IDS.has(s.iconName) ? s.iconName : autoIconFor(s.name), 18)}<b>${esc(s.name)}</b></span></td>
                 <td><span class="badge">${esc(s.branchCode)}</span></td>
                 <td>${yearLabel(s.academicYear)}</td>
                 <td>${n}</td>
@@ -676,14 +1083,16 @@ function renderSubjects() {
 
 function openSubjectModal(existing) {
   const prefs = loadPrefs();
-  const s = existing || {
+  const raw = existing || {
     branchCode: prefs.branch || "ENTC",
     academicYear: 2,
     name: "",
     paperCount: 2,
-    iconName: "graphic_eq",
+    iconName: "",
   };
-  const icons = ["graphic_eq", "memory", "cell_tower", "smart_toy", "computer", "language"];
+  // An icon id the catalogue does not know is treated as "not chosen yet",
+  // so the app falls back to matching the subject name.
+  const s = { ...raw, iconName: ICON_IDS.has(raw.iconName) ? raw.iconName : "" };
 
   openModal(existing ? "Edit subject" : "Add subject", `
     <div class="field"><label>Subject name</label>
@@ -699,16 +1108,11 @@ function openSubjectModal(existing) {
           `<option value="${y.year}" ${s.academicYear === y.year ? "selected" : ""}>${y.label}</option>`).join("")}</select>
       </div>
     </div>
-    <div class="field-row">
-      <div class="field"><label>Shown paper count</label>
-        <input id="sCount" type="number" min="0" value="${s.paperCount}" />
-        <p class="hint">Display number in the app (can exceed files uploaded).</p>
-      </div>
-      <div class="field"><label>Icon</label>
-        <select id="sIcon">${icons.map((i) =>
-          `<option ${i === s.iconName ? "selected" : ""}>${i}</option>`).join("")}</select>
-      </div>
+    <div class="field"><label>Shown paper count</label>
+      <input id="sCount" type="number" min="0" value="${s.paperCount}" />
+      <p class="hint">Display number in the app (can exceed files uploaded).</p>
     </div>
+    ${iconPickerMarkup(s.iconName)}
   `, [
     { label: "Cancel", kind: "secondary" },
     { label: existing ? "Save changes" : "Add subject", onClick: async () => {
@@ -722,10 +1126,13 @@ function openSubjectModal(existing) {
         (!existing || x.id !== existing.id));
       if (dupe) { toast("This subject already exists for " + branchCode, "err"); return; }
       const id = existing ? existing.id : slug(branchCode + "_" + name);
+      // No explicit pick means the app guesses from the name at render time.
+      const picked = $("#sIconPicker")?.dataset.selected || "";
+      const iconName = ICON_IDS.has(picked) ? picked : autoIconFor(name);
       await DB.put("subjects", {
         id, name, branchCode, academicYear,
         paperCount: parseInt($("#sCount").value, 10) || 0,
-        iconName: $("#sIcon").value,
+        iconName,
       });
       savePrefs({ branch: branchCode });
       toast(existing ? "Subject updated" : "Subject added", "ok");
@@ -733,6 +1140,8 @@ function openSubjectModal(existing) {
       renderSubjects();
     } },
   ]);
+
+  wireIconPicker();
 }
 
 function deleteSubject(s) {
@@ -1052,6 +1461,318 @@ async function saveNote(existing) {
   renderNotes();
 }
 
+function requestBadgeClass(status) {
+  if (status === "fulfilled") return "green";
+  if (status === "rejected") return "red";
+  return "";
+}
+
+function renderRequests() {
+  $("#viewTitle").textContent = "Requests";
+  $("#viewSubtitle").textContent = "Review the latest 200 student content requests";
+  $("#topbarActions").innerHTML = `<button class="btn tonal" id="btnRefreshRequests">↻ Refresh</button>`;
+
+  const f = state.requestFilter;
+  const rows = state.requests.filter((r) => {
+    if (f.status && r.status !== f.status) return false;
+    if (f.kind && r.kind !== f.kind) return false;
+    if (f.branch && r.branchCode !== f.branch) return false;
+    if (f.q && !(r.title + " " + (r.details || "") + " " + r.branchCode).toLowerCase().includes(f.q.toLowerCase())) return false;
+    return true;
+  });
+  const pending = state.requests.filter((r) => r.status === "pending").length;
+  const fulfilled = state.requests.filter((r) => r.status === "fulfilled").length;
+  const rejected = state.requests.filter((r) => r.status === "rejected").length;
+
+  $("#view-requests").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="stat-num">${pending}</div><div class="stat-label">Pending</div></div>
+      <div class="card"><div class="stat-num">${fulfilled}</div><div class="stat-label">Fulfilled</div></div>
+      <div class="card"><div class="stat-num">${rejected}</div><div class="stat-label">Rejected</div></div>
+    </div>
+    <div class="panel">
+      <div class="filters">
+        <select id="rStatusFilter">
+          <option value="">All statuses</option>
+          ${["pending", "fulfilled", "rejected"].map((s) => `<option value="${s}" ${f.status === s ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("")}
+        </select>
+        <select id="rKindFilter">
+          <option value="">Papers and notes</option>
+          <option value="paper" ${f.kind === "paper" ? "selected" : ""}>Question papers</option>
+          <option value="note" ${f.kind === "note" ? "selected" : ""}>Study notes</option>
+        </select>
+        <select id="rBranchFilter">
+          <option value="">All branches</option>
+          ${BRANCHES.map((b) => `<option value="${b.code}" ${f.branch === b.code ? "selected" : ""}>${b.code}</option>`).join("")}
+        </select>
+        <input id="rSearch" type="search" placeholder="Search requests…" value="${esc(f.q)}" />
+      </div>
+      ${state.requestLoadError ? `<p class="hint" style="color:var(--error)">Requests unavailable: ${esc(state.requestLoadError)}. Use Refresh to retry.</p>` : ""}
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Request</th><th>Type</th><th>Branch &amp; year</th><th>Status</th><th>Submitted</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.length === 0
+            ? `<tr><td colspan="6" class="empty"><strong>${state.requests.length ? "No requests match" : "No requests yet"}</strong>${state.requests.length ? "Adjust the filters to see more requests." : "Student requests will appear here automatically."}</td></tr>`
+            : rows.map((r) => `
+          <tr>
+            <td>
+              <b>${esc(r.title)}</b>
+              <br><span class="muted">${esc(r.details || "No additional details")}</span>
+              ${r.adminNote ? `<br><span class="muted"><b>Update:</b> ${esc(r.adminNote)}</span>` : ""}
+            </td>
+            <td>${r.kind === "paper" ? "Question paper" : "Study note"}</td>
+            <td><span class="badge">${esc(r.branchCode)}</span><br>${yearLabel(r.academicYear)}</td>
+            <td><span class="badge ${requestBadgeClass(r.status)}">${esc(r.status)}</span></td>
+            <td>${fmtDate(r.createdAt)}</td>
+            <td><div class="row-actions"><button class="btn secondary small" data-request-id="${esc(r.id)}">Review</button><button class="btn danger small" data-request-delete="${esc(r.id)}">Delete</button></div></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <p class="muted" style="margin:12px 0 0">${rows.length} request${rows.length === 1 ? "" : "s"} shown</p>
+    </div>`;
+
+  $("#btnRefreshRequests").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      state.requests = await DB.listAllRequests();
+      state.requests.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+      state.requestLoadError = "";
+      renderRequests();
+      toast("Requests refreshed", "ok");
+    } catch (err) {
+      state.requestLoadError = err.message || "Could not refresh requests";
+      button.disabled = false;
+      toast(state.requestLoadError, "err");
+    }
+  });
+  $("#rStatusFilter").addEventListener("change", (e) => { f.status = e.target.value; renderRequests(); });
+  $("#rKindFilter").addEventListener("change", (e) => { f.kind = e.target.value; renderRequests(); });
+  $("#rBranchFilter").addEventListener("change", (e) => { f.branch = e.target.value; renderRequests(); });
+  $("#rSearch").addEventListener("input", (e) => {
+    f.q = e.target.value;
+    clearTimeout(window.__requestSearch);
+    window.__requestSearch = setTimeout(renderRequests, 200);
+  });
+  $("#view-requests").querySelectorAll("[data-request-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const request = state.requests.find((r) => r.id === button.dataset.requestId);
+      if (request) openRequestModal(request);
+    });
+  });
+  $("#view-requests").querySelectorAll("[data-request-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteRequest(button.dataset.requestDelete));
+  });
+}
+
+async function deleteRequest(id) {
+  const request = state.requests.find((r) => r.id === id);
+  if (!request) return;
+  confirmDialog(
+    "Delete request?",
+    `"${request.title}" will be permanently removed from the request list.`,
+    "Delete",
+    async () => {
+      await DB.deleteRequest(id);
+      state.requests = state.requests.filter((r) => r.id !== id);
+      state.requestLoadError = "";
+      toast("Request deleted", "ok");
+      renderRequests();
+    }
+  );
+}
+
+function openRequestModal(existing) {
+  const statuses = [
+    ["pending", "Pending"],
+    ["fulfilled", "Fulfilled"],
+    ["rejected", "Rejected"],
+  ];
+  const details = existing.details || "No additional details were provided.";
+
+  openModal("Review request", `
+    <div class="codebox">${existing.kind === "paper" ? "Question paper" : "Study note"} · ${esc(existing.branchCode)} · ${yearLabel(existing.academicYear)}
+Submitted ${fmtDate(existing.createdAt)}</div>
+    <div class="field"><label>Requested content</label>
+      <div style="white-space:pre-wrap">${esc(existing.title)}</div>
+    </div>
+    <div class="field"><label>Student details</label>
+      <div class="muted" style="white-space:pre-wrap">${esc(details)}</div>
+    </div>
+    <div class="field"><label>Status</label>
+      <select id="requestStatus">${statuses.map(([value, label]) =>
+        `<option value="${value}" ${existing.status === value ? "selected" : ""}>${label}</option>`).join("")}</select>
+    </div>
+    <div class="field"><label>Update for the student</label>
+      <textarea id="requestAdminNote" rows="3" maxlength="300" placeholder="Optional for fulfilled requests; required when rejecting.">${esc(existing.adminNote || "")}</textarea>
+      <p class="hint">This message appears in the student's request history.</p>
+    </div>`, [
+    { label: "Cancel", kind: "secondary" },
+    { label: "Save update", onClick: () => saveRequest(existing) },
+  ]);
+}
+
+async function saveRequest(existing) {
+  const status = $("#requestStatus").value;
+  const adminNote = $("#requestAdminNote").value.trim();
+  if (status === "rejected" && !adminNote) throw new Error("Add a short reason when rejecting a request.");
+  await DB.updateRequest(existing.id, status, adminNote);
+  state.requests = await DB.listAllRequests();
+  state.requests.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  toast("Request updated", "ok");
+  renderRequests();
+}
+
+function feedbackBadgeClass(status) {
+  if (status === "resolved") return "green";
+  if (status === "reviewed" || status === "dismissed") return "grey";
+  return "";
+}
+
+function renderFeedback() {
+  $("#viewTitle").textContent = "Feedback";
+  $("#viewSubtitle").textContent = "Anonymous reports from app users";
+  $("#topbarActions").innerHTML = `<button class="btn tonal" id="btnRefreshFeedback">↻ Refresh</button>`;
+
+  const f = state.feedbackFilter;
+  const rows = state.feedback.filter((item) => {
+    if (f.status && item.status !== f.status) return false;
+    if (f.category && item.category !== f.category) return false;
+    if (f.q && !(item.message + " " + (item.email || "") + " " + item.appVersion).toLowerCase().includes(f.q.toLowerCase())) return false;
+    return true;
+  });
+  const newCount = state.feedback.filter((item) => item.status === "new").length;
+  const reviewedCount = state.feedback.filter((item) => item.status === "reviewed").length;
+  const resolvedCount = state.feedback.filter((item) => item.status === "resolved").length;
+
+  $("#view-feedback").innerHTML = `
+    <div class="cards">
+      <div class="card"><div class="stat-num">${newCount}</div><div class="stat-label">New</div></div>
+      <div class="card"><div class="stat-num">${reviewedCount}</div><div class="stat-label">Reviewed</div></div>
+      <div class="card"><div class="stat-num">${resolvedCount}</div><div class="stat-label">Resolved</div></div>
+    </div>
+    <div class="panel">
+      <div class="filters">
+        <select id="fStatusFilter">
+          <option value="">All statuses</option>
+          ${["new", "reviewed", "resolved", "dismissed"].map((status) => `<option value="${status}" ${f.status === status ? "selected" : ""}>${status[0].toUpperCase() + status.slice(1)}</option>`).join("")}
+        </select>
+        <select id="fCategoryFilter">
+          <option value="">All categories</option>
+          ${["bug", "content", "feature", "other"].map((category) => `<option value="${category}" ${f.category === category ? "selected" : ""}>${category[0].toUpperCase() + category.slice(1)}</option>`).join("")}
+        </select>
+        <input id="fFeedbackSearch" type="search" placeholder="Search feedback…" value="${esc(f.q)}" />
+      </div>
+      ${state.feedbackLoadError ? `<p class="hint" style="color:var(--error)">Feedback unavailable: ${esc(state.feedbackLoadError)}. Use Refresh to retry.</p>` : ""}
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Feedback</th><th>Category</th><th>App</th><th>Status</th><th>Received</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${rows.length === 0
+            ? `<tr><td colspan="6" class="empty"><strong>${state.feedback.length ? "No feedback matches" : "No feedback yet"}</strong>${state.feedback.length ? "Adjust the filters to see more feedback." : "User reports will appear here."}</td></tr>`
+            : rows.map((item) => `
+          <tr>
+            <td>
+              <b>${esc(item.message.length > 140 ? item.message.slice(0, 140) + "…" : item.message)}</b>
+              ${item.email ? `<br><span class="muted">${esc(item.email)}</span>` : ""}
+              ${item.adminNote ? `<br><span class="muted"><b>Note:</b> ${esc(item.adminNote)}</span>` : ""}
+            </td>
+            <td>${esc(item.category[0].toUpperCase() + item.category.slice(1))}</td>
+            <td>${esc(item.platform)} ${esc(item.appVersion || "")}</td>
+            <td><span class="badge ${feedbackBadgeClass(item.status)}">${esc(item.status)}</span></td>
+            <td>${fmtDate(item.createdAt)}</td>
+            <td><div class="row-actions">
+              <button class="btn secondary small" data-feedback-id="${esc(item.id)}">Review</button>
+              <button class="btn danger small" data-feedback-delete="${esc(item.id)}">Delete</button>
+            </div></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <p class="muted" style="margin:12px 0 0">${rows.length} feedback message${rows.length === 1 ? "" : "s"} shown</p>
+    </div>`;
+
+  $("#btnRefreshFeedback").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      state.feedback = await DB.listAllFeedback();
+      state.feedback.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+      state.feedbackLoadError = "";
+      renderFeedback();
+      toast("Feedback refreshed", "ok");
+    } catch (err) {
+      state.feedbackLoadError = err.message || "Could not refresh feedback";
+      button.disabled = false;
+      toast(state.feedbackLoadError, "err");
+    }
+  });
+  $("#fStatusFilter").addEventListener("change", (e) => { f.status = e.target.value; renderFeedback(); });
+  $("#fCategoryFilter").addEventListener("change", (e) => { f.category = e.target.value; renderFeedback(); });
+  $("#fFeedbackSearch").addEventListener("input", (e) => {
+    f.q = e.target.value;
+    clearTimeout(window.__feedbackSearch);
+    window.__feedbackSearch = setTimeout(renderFeedback, 200);
+  });
+  $("#view-feedback").querySelectorAll("[data-feedback-id]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.feedback.find((entry) => entry.id === button.dataset.feedbackId);
+      if (item) openFeedbackModal(item);
+    });
+  });
+  $("#view-feedback").querySelectorAll("[data-feedback-delete]").forEach((button) => {
+    button.addEventListener("click", () => deleteFeedbackItem(button.dataset.feedbackDelete));
+  });
+}
+
+function openFeedbackModal(existing) {
+  const statuses = [["new", "New"], ["reviewed", "Reviewed"], ["resolved", "Resolved"], ["dismissed", "Dismissed"]];
+  openModal("Review feedback", `
+    <div class="codebox">${esc(existing.category)} · ${esc(existing.platform)} ${esc(existing.appVersion || "")} · ${fmtDate(existing.createdAt)}</div>
+    <div class="field"><label>Message</label>
+      <div style="white-space:pre-wrap">${esc(existing.message)}</div>
+    </div>
+    <div class="field"><label>Contact</label>
+      <div class="muted">${esc(existing.email || "Anonymous")}</div>
+    </div>
+    <div class="field"><label>Status</label>
+      <select id="feedbackStatus">${statuses.map(([value, label]) =>
+        `<option value="${value}" ${existing.status === value ? "selected" : ""}>${label}</option>`).join("")}</select>
+    </div>
+    <div class="field"><label>Internal note</label>
+      <textarea id="feedbackAdminNote" rows="3" maxlength="500" placeholder="Optional note for your team">${esc(existing.adminNote || "")}</textarea>
+    </div>`, [
+    { label: "Cancel", kind: "secondary" },
+    { label: "Save update", onClick: () => saveFeedback(existing) },
+  ]);
+}
+
+async function saveFeedback(existing) {
+  const status = $("#feedbackStatus").value;
+  const adminNote = $("#feedbackAdminNote").value.trim();
+  await DB.updateFeedback(existing.id, status, adminNote);
+  state.feedback = await DB.listAllFeedback();
+  state.feedback.sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+  toast("Feedback updated", "ok");
+  renderFeedback();
+}
+
+function deleteFeedbackItem(id) {
+  confirmDialog(
+    "Delete feedback?",
+    "This feedback message will be permanently removed.",
+    "Delete",
+    async () => {
+      await DB.deleteFeedback(id);
+      state.feedback = state.feedback.filter((item) => item.id !== id);
+      toast("Feedback deleted", "ok");
+      renderFeedback();
+    }
+  );
+}
+
 /* ============================================================
  * SETTINGS (backup / advanced — not part of daily flow)
  * ============================================================ */
@@ -1059,12 +1780,34 @@ function renderData() {
   $("#viewTitle").textContent = "Settings";
   $("#viewSubtitle").textContent = "Account, backup, and rare tools";
   $("#topbarActions").innerHTML = "";
-  const session = JSON.parse(localStorage.getItem("pyq-admin-session") || "{}");
+  const session = JSON.parse(localStorage.getItem("paperadda-admin-session") || "{}");
   $("#view-data").innerHTML = `
     <div class="panel">
       <h3>Account</h3>
       <p class="muted">${esc(session.email || "")}</p>
+      <div class="field"><label>Display name</label>
+        <input id="acctName" value="${esc(session.displayName || "")}" placeholder="Your name" autocomplete="off" /></div>
+      <div class="field-row">
+        <div class="field"><label>New password</label>
+          <input id="acctPass" type="password" placeholder="••••••••" autocomplete="new-password" /></div>
+        <div class="field"><label>Confirm password</label>
+          <input id="acctPass2" type="password" placeholder="••••••••" autocomplete="new-password" /></div>
+      </div>
+      <p class="hint">Leave passwords blank to keep the current one. Min 8 characters.</p>
+      <button class="btn tonal" id="btnAcctSave">Save account</button>
       <button class="btn secondary" id="btnSettingsLogout">Log out</button>
+    </div>
+    <div class="panel">
+      <h3>Team</h3>
+      <p class="muted">People who can log in and upload papers. New members sign in with their email + the password you set.</p>
+      <div id="teamList"><p class="muted">Loading…</p></div>
+      <div class="field-row">
+        <div class="field"><label>Email</label>
+          <input id="teamEmail" type="email" placeholder="teammate@example.com" autocomplete="off" /></div>
+        <div class="field"><label>Temp password</label>
+          <input id="teamPass" type="password" placeholder="min 8 characters" autocomplete="new-password" /></div>
+      </div>
+      <button class="btn tonal" id="btnTeamInvite">Add member</button>
     </div>
     <div class="panel">
       <h3>Export backup</h3>
@@ -1085,11 +1828,24 @@ papers(id, title, subjectName, branchCode, year, examType,
        fileFormat, fileSize, duration, maxMarks,
        sampleQuestions[], storagePath)
 notes(id, title, content, subjectName, branchCode,
-      academicYear, fileUrl, storagePath, updatedAt)</div>
+       academicYear, fileUrl, storagePath, updatedAt)
+contentRequests(id, kind, branchCode, academicYear, title,
+                details, status, adminNote, createdAt, updatedAt)
+feedback(id, category, message, email, appVersion,
+         platform, status, adminNote, createdAt, updatedAt)</div>
+    </div>
+    <div class="panel">
+      <h3>Legal</h3>
+      <p class="muted">Public pages for students and visitors.</p>
+      <p>
+        <a href="privacy" target="_blank" rel="noopener">Privacy Policy</a> &middot;
+        <a href="terms" target="_blank" rel="noopener">Terms of Use &amp; Copyright Notice</a> &middot;
+        <a href="delete-data" target="_blank" rel="noopener">Delete Your Data</a>
+      </p>
     </div>
     <div class="panel">
       <h3 style="color:var(--error)">Danger zone</h3>
-      <p class="muted">Erase all subjects, papers and notes from the cloud. Uploaded PDFs remain until deleted per-item.</p>
+      <p class="muted">Erase all subjects, papers and notes from the cloud. Uploaded PDFs remain until deleted per-item. Requires typing ERASE to confirm.</p>
       <button class="btn danger" id="btnReset">Erase cloud data</button>
     </div>`;
 
@@ -1098,6 +1854,82 @@ notes(id, title, content, subjectName, branchCode,
     showLogin();
     toast("Logged out");
   });
+  $("#btnAcctSave").addEventListener("click", async () => {
+    try {
+      const pass = $("#acctPass").value;
+      const pass2 = $("#acctPass2").value;
+      if (pass !== pass2) { toast("Passwords do not match", "err"); return; }
+      const patch = { displayName: $("#acctName").value.trim() };
+      if (pass) patch.password = pass;
+      await DB.updateOwnAccount(patch);
+      toast("Account updated", "ok");
+      await bootApp();
+      switchView("data");
+    } catch (err) {
+      toast(err.message || "Update failed", "err");
+    }
+  });
+  const loadTeam = async () => {
+    const box = $("#teamList");
+    try {
+      const users = await DB.listTeam();
+      const me = (JSON.parse(localStorage.getItem("paperadda-admin-session") || "{}").email || "").toLowerCase();
+      if (!users.length) { box.innerHTML = `<p class="muted">No members yet.</p>`; return; }
+      box.innerHTML = `<ul class="list-plain">${users.map((u) => `
+        <li>${esc(u.email || "")}
+          ${String(u.email || "").toLowerCase() === me ? ` <span class="badge green">you</span>` : ``}
+          ${u.is_admin ? `` : ` <span class="badge grey">no access</span>`}
+          <div class="row-actions">
+            <button class="btn secondary" data-team-reset="${esc(u.id)}">Reset password</button>
+            ${String(u.email || "").toLowerCase() === me ? `` : `<button class="btn secondary" data-team-remove="${esc(u.id)}" data-team-email="${esc(u.email || "")}">Remove</button>`}
+          </div>
+        </li>`).join("")}</ul>`;
+      box.querySelectorAll("[data-team-reset]").forEach((b) => b.addEventListener("click", () => {
+        const id = b.getAttribute("data-team-reset");
+        openModal("Reset password", `
+          <div class="field"><label>New temp password (min 8 characters)</label>
+            <input id="resetPass" type="password" autocomplete="new-password" /></div>
+          <p class="hint">Share it with the member privately — they can change it under Account.</p>`, [
+          { label: "Cancel", kind: "secondary" },
+          {
+            label: "Set password", kind: "danger", onClick: async () => {
+              const p = $("#resetPass").value;
+              if (p.length < 8) throw new Error("Password must be at least 8 characters.");
+              await DB.resetTeamPassword(id, p);
+              toast("Password updated", "ok");
+              await loadTeam();
+            }
+          },
+        ]);
+      }));
+      box.querySelectorAll("[data-team-remove]").forEach((b) => b.addEventListener("click", () => {
+        const id = b.getAttribute("data-team-remove");
+        const email = b.getAttribute("data-team-email");
+        confirmDialog("Remove member?", `"${email}" will lose access immediately. Their uploads stay.`, "Remove", async () => {
+          await DB.removeTeamMember(id);
+          toast("Member removed", "ok");
+          await loadTeam();
+        });
+      }));
+    } catch (err) {
+      box.innerHTML = `<p class="muted">Could not load team: ${esc(err.message || "error")}</p>`;
+    }
+  };
+  $("#btnTeamInvite").addEventListener("click", async () => {
+    try {
+      const email = $("#teamEmail").value.trim();
+      const password = $("#teamPass").value;
+      if (!email) { toast("Email is required", "err"); return; }
+      await DB.inviteTeamMember(email, password);
+      toast("Member added", "ok");
+      $("#teamEmail").value = "";
+      $("#teamPass").value = "";
+      await loadTeam();
+    } catch (err) {
+      toast(err.message || "Invite failed", "err");
+    }
+  });
+  loadTeam();
   $("#btnExport").addEventListener("click", async () => {
     const data = await DB.exportJSON();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -1128,13 +1960,25 @@ notes(id, title, content, subjectName, branchCode,
     e.target.value = "";
   });
   $("#btnReset").addEventListener("click", () => {
-    confirmDialog("Erase everything?",
-      "All subjects, papers and notes will be deleted from Supabase. This cannot be undone.",
-      "Erase", async () => {
-        await DB.resetToSeed();
-        toast("Cloud data erased", "ok");
-        await reloadAll();
-        switchView("dashboard");
-      });
+    // Type-to-confirm: a single misclick must never wipe the catalog that
+    // every student's app mirrors. Throwing inside onClick keeps the modal
+    // open (openModal only closes on success) and surfaces the message.
+    openModal("Erase everything?",
+      `<p class="muted">All subjects, papers and notes will be deleted from Supabase. This cannot be undone.</p>
+       <div class="field"><label>Type <b>ERASE</b> to confirm</label>
+         <input id="eraseConfirm" placeholder="ERASE" autocomplete="off" /></div>`,
+      [
+        { label: "Cancel", kind: "secondary" },
+        {
+          label: "Erase everything", kind: "danger", onClick: async () => {
+            const typed = (($("#eraseConfirm") || {}).value || "").trim();
+            if (typed !== "ERASE") throw new Error("Type ERASE to confirm");
+            await DB.eraseAllData();
+            toast("Cloud data erased", "ok");
+            await reloadAll();
+            switchView("dashboard");
+          }
+        },
+      ]);
   });
 }
