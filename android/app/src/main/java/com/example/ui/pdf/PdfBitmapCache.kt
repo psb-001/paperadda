@@ -24,9 +24,10 @@ object PdfBitmapCache {
 
     private val maxKb: Int = run {
         val heapKb = Runtime.getRuntime().maxMemory() / 1024
-        // An eighth of the heap, but never less than 24 MB (two hi-res pages)
-        // and never more than 96 MB (we are one activity in a student app).
-        (heapKb / 8).coerceIn(24L * 1024, 96L * 1024).toInt()
+        // An eighth of the heap, but never more than 40 MB. The pages currently
+        // on screen are live regardless of this cache, so the cache has to stay
+        // small or it is what pushes the app into an OutOfMemoryError.
+        (heapKb / 8).coerceIn(8L * 1024, 24L * 1024).toInt()
     }
 
     private val cache = object : LruCache<String, Bitmap>(maxKb) {

@@ -402,7 +402,11 @@ private fun PdfDocumentStrip(
     val zoomed = scale > 1.001f
 
     // Render a little ahead so a fast scroll does not outrun the decoder.
-    val bucket = bucketFor(scale)
+    //
+    // Prefetch always at 1x, including while zoomed. At hi-res the neighbouring
+    // page would be a full ~12 MB bitmap, so prefetching one keeps a zoomed
+    // session at two hi-res pages instead of three.
+    val bucket = 1f
     LaunchedEffect(firstVisible, width, bucket) {
         for (ahead in 1..PREFETCH) {
             val target = firstVisible + ahead
@@ -478,7 +482,12 @@ private fun PdfDocumentStrip(
                 PdfPage(
                     document = document,
                     pageIndex = start + offset,
-                    containerWidthPx = width
+                    containerWidthPx = width,
+                    // While zoomed the list is locked, so a neighbouring page is
+                    // never examined closely. Rendering every composed page at
+                    // double resolution cost about 12 MB each for nothing, and
+                    // together they were enough to exhaust a phone's heap.
+                    hiRes = zoomed && start + offset == firstVisible
                 )
             }
         }
@@ -494,9 +503,12 @@ private fun PdfDocumentStrip(
 private fun PdfPage(
     document: PdfDocument,
     pageIndex: Int,
-    containerWidthPx: Int
+    containerWidthPx: Int,
+    hiRes: Boolean
 ) {
-    val renderWidth = containerWidthPx.coerceAtLeast(MIN_RENDER_PX)
+    val renderWidth = (containerWidthPx * if (hiRes) 2f else 1f)
+        .toInt()
+        .coerceAtLeast(MIN_RENDER_PX)
     var bitmap by remember(pageIndex, renderWidth) {
         mutableStateOf(PdfBitmapCache.get(pageIndex, renderWidth))
     }
@@ -707,7 +719,7 @@ private fun PageJumpDialog(
 private fun bucketFor(scale: Float): Float = if (scale > HI_RES_THRESHOLD) 2f else 1f
 
 private const val PRELOAD = 1
-private const val PREFETCH = 2
+private const val PREFETCH = 1
 private const val MIN_SCALE = 1f
 private const val MAX_SCALE = 4f
 private const val ZOOM_STEP = 1.4f

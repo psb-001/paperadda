@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import kotlin.math.floor
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -106,15 +107,21 @@ class PdfDocument(private val file: File) {
                 val (naturalWidth, naturalHeight) = pageSizes.getOrElse(index) { 612 to 792 }
 
                 val wanted = targetWidthPx.coerceAtLeast(MIN_WIDTH_PX)
-                // PDFBox scales from the page's own point size, so the same
-                // budget as before applies.
                 val scale = min(wanted.toFloat() / naturalWidth, MAX_SCALE)
-                val safeScale =
-                    if (scale * scale * naturalWidth * naturalHeight > MAX_PIXELS) {
-                        sqrt(MAX_PIXELS.toDouble() / (naturalWidth.toDouble() * naturalHeight)).toFloat()
-                    } else {
-                        scale
-                    }
+
+                // Resolve the output size first and floor it, then derive the
+                // scale from those exact dimensions. Working in scale alone
+                // rounded up and overshot the pixel cap by ~0.1%, which is how a
+                // "4 million pixel" budget quietly became 4.005 million.
+                var outWidth = floor(naturalWidth.toDouble() * scale).toInt()
+                    .coerceAtLeast(MIN_WIDTH_PX)
+                var outHeight = floor(naturalHeight.toDouble() * scale).toInt().coerceAtLeast(1)
+                if (outWidth.toLong() * outHeight > MAX_PIXELS) {
+                    val shrink = sqrt(MAX_PIXELS.toDouble() / (outWidth.toLong() * outHeight))
+                    outWidth = floor(outWidth * shrink).toInt().coerceAtLeast(MIN_WIDTH_PX)
+                    outHeight = floor(outHeight * shrink).toInt().coerceAtLeast(1)
+                }
+                val safeScale = outWidth.toFloat() / naturalWidth
                 try {
                     val bitmap = r.renderImage(
                         index,
@@ -127,9 +134,30 @@ class PdfDocument(private val file: File) {
                     )
                     Log.d(TAG, "rendered page $index at ${bitmap.width}x${bitmap.height}")
                     bitmap
-                } catch (e: Exception) {
-                    Log.e(TAG, "renderPage($index) failed", e)
-                    throw IOException("Page ${index + 1} could not be drawn", e)
+                } catch (oom: OutOfMemoryError) {
+                    // Losing a page entirely is far worse than showing it at a
+                    // lower resolution, so give up the cached pages and try once
+                    // more at three-quarter width.
+                    Log.w(TAG, "Out of memory rendering page $index, retrying smaller", oom)
+                    PdfBitmapCache.clear()
+                    try {
+                        r.renderImage(
+                            index,
+                            safeScale * 0.75f,
+                            ImageType.RGB,
+                            RenderDestination.VIEW
+                        ).also { Log.d(TAG, "recovered page $index at ${it.width}x${it.height}") }
+                    } catch (retry: Throwable) {
+                        Log.e(TAG, "renderPage($index) failed even when smaller", retry)
+                        throw IOException("Page ${index + 1} could not be drawn: ${describe(retry)}", retry)
+                    }
+                } catch (t: Throwable) {
+                    // Throwable, not Exception: a class missing from a minified
+                    // build arrives as NoClassDefFoundError, which is an Error,
+                    // so `catch (Exception)` let it escape silently and the user
+                    // just saw "could not be drawn" with nothing in the log.
+                    Log.e(TAG, "renderPage($index) failed", t)
+                    throw IOException("Page ${index + 1} could not be drawn: ${describe(t)}", t)
                 }
             }
         }
@@ -190,6 +218,12 @@ class PdfDocument(private val file: File) {
         }
     }
 
+    /** A short, readable reason for the reader to show and for the log to keep. */
+    private fun describe(t: Throwable): String {
+        val root = generateSequence(t) { it.cause }.last()
+        return "${root::class.java.simpleName}: ${root.message ?: "no detail"}"
+    }
+
     suspend fun close() = withContext(Dispatchers.IO) {
         mutex.withLock { closeQuietly() }
     }
@@ -211,7 +245,17 @@ class PdfDocument(private val file: File) {
         private const val TAG = "PdfDocument"
         const val MIN_WIDTH_PX = 320
         const val MAX_SCALE = 4f
-        const val MAX_PIXELS = 12_000_000L
+        /**
+         * Ceiling on the pixels in one rendered page.
+         *
+         * This was 12M, which let an A4 page render at 2076x2937 — a 24 MB
+         * bitmap. With a few pages composed at once plus the cache, the app
+         * asked for more memory than a phone's heap allows, and died with an
+         * OutOfMemoryError that the old `catch (Exception)` could not see, so
+         * every page just reported "could not be drawn". 4M keeps a page near
+         * 1680px wide, which is still far sharper than the unzoomed render.
+         */
+        const val MAX_PIXELS = 3_000_000L
 
         /**
          * PDFBox needs a Context to load its bundled fonts and resources before
