@@ -217,8 +217,30 @@ private fun countKey(subjectName: String, branchCode: String): String =
         }
     }
 
+    /**
+     * Newest year first, then by the "Paper N" number in the title.
+     *
+     * The backend only orders by `year.desc`, so papers inside a year came back in
+     * an arbitrary order and a list could read 1, 2, 3, 4, 5, 6, 7, 1. Sorting on
+     * the parsed number rather than the title keeps the order correct once a
+     * subject has ten or more papers in one year, where "Paper 10" would otherwise
+     * sort between 1 and 2.
+     */
+    private val paperDisplayOrder: Comparator<QuestionPaper> =
+        compareByDescending<QuestionPaper> { it.year }
+            .thenBy { paperNumberIn(it.title) }
+            .thenBy { it.title.lowercase() }
+
+    private fun paperNumberIn(title: String): Int =
+        Regex("""·\s*Paper\s+(\d+)""", RegexOption.IGNORE_CASE)
+            .find(title)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+            ?: Int.MAX_VALUE
+
     fun getPapersForSubject(subjectName: String, branchCode: String): List<QuestionPaper> {
-        return activePapers().filter {
+        val matched = activePapers().filter {
             it.subjectName.equals(subjectName, ignoreCase = true) &&
                 (
                     it.branchCode.equals(branchCode, ignoreCase = true) ||
@@ -227,6 +249,7 @@ private fun countKey(subjectName: String, branchCode: String): String =
                         it.branchCode.equals(BRANCH_COMMON, ignoreCase = true)
                     )
         }
+        return matched.sortedWith(paperDisplayOrder)
     }
 
     fun getPaperById(id: String): QuestionPaper? {
