@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- Room database and downloaded PDFs live in device-protected storage;
+             exclude generated files from cloud backup. -->
+        <exclude domain="database" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="file" path="." />
+    </cloud-backup>
+</data-extraction-rules>

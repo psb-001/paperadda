@@ -1,0 +1,35 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    // Supabase — official hosted MCP (OAuth, recommended 2026).
+    // Covers Postgres, Auth, Storage, Edge Functions, etc.
+    // Auth: restart opencode, then authenticate via OAuth in browser on first use.
+    // Optional scoping examples:
+    //   - Single project: "https://mcp.supabase.com/mcp?project_ref=YOUR_PROJECT_REF"
+    //   - Read-only:      "https://mcp.supabase.com/mcp?project_ref=YOUR_PROJECT_REF&read_only=true"
+    // Token alternative (local stdio, uncomment to use instead of remote):
+    //   "supabase-local": {
+    //     "type": "local",
+    //     "command": ["npx", "-y", "@supabase/mcp-server-supabase@latest"],
+    //     "enabled": false,
+    //     "environment": { "SUPABASE_ACCESS_TOKEN": "{env:SUPABASE_ACCESS_TOKEN}" }
+    //   }
+    "supabase": {
+      "type": "remote",
+      "url": "https://mcp.supabase.com/mcp",
+      "enabled": true
+    },
+    // Cloudflare — official Code Mode MCP, covers entire Cloudflare API incl. R2 Storage,
+    // Workers, KV, D1, DNS, etc. Token-efficient (~1k tokens for ~2500 endpoints).
+    // Auth option 1 (recommended): OAuth — just restart opencode, auth via browser on first use.
+    // Auth option 2 (CI/automation): add headers with API token:
+    //   "headers": { "Authorization": "Bearer {env:CLOUDFLARE_API_TOKEN}" }
+    // Create token at https://dash.cloudflare.com/profile/api-tokens with
+    // R2 (Object Storage) + Account Resources: Read permissions for your use case.
+    "cloudflare": {
+      "type": "remote",
+      "url": "https://mcp.cloudflare.com/mcp",
+      "enabled": true
+    }
+  }
+}
