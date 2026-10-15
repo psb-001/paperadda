@@ -1,0 +1,29 @@
+# OS / editor
+.DS_Store
+*.iml
+.idea/
+*.swp
+
+# Secrets — never commit
+**/keystore/
+**/*.jks
+**/*.pw
+**/.env
+**/.env.*
+**/local.properties
+**/.wrangler/
+
+# Android builds
+**/build/
+**/.gradle/
+**/.cxx/
+**/.externalNativeBuild/
+**/captures/
+**/.kotlin/
+
+# Node (portal tooling if added later)
+**/node_modules/
+
+# Portal local Supabase config (copy config.example.js → config.js)
+admin-portal/js/config.js
+admin-portal/public/js/config.js

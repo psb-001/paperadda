@@ -1,0 +1,8 @@
+.DS_Store
+.wrangler/
+.env
+.env.*
+node_modules/
+# Local Supabase config — copy config.example.js → config.js
+js/config.js
+public/js/config.js
