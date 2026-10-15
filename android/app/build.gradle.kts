@@ -8,6 +8,13 @@ plugins {
     alias(libs.plugins.roborazzi)
 }
 
+// Room writes its schema JSON here on every build. It is the input for
+// auto-migrations and MigrationTestHelper; without it a schema change can only
+// be validated by shipping it.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 // Release signing for sideloaded builds. Passwords live in keystore/release-keystore.pw
 // (gitignored). If the file is missing, release builds fall back to debug signing so
 // `assembleRelease` still works on fresh clones.
@@ -18,7 +25,7 @@ val keystoreProps = Properties().apply {
 val releaseStorePassword = keystoreProps.getProperty("storePassword", "")
 
 android {
-    namespace = "com.example"
+    namespace = "com.paperadda.app"
     compileSdk = 37
 
     defaultConfig {

@@ -19,7 +19,7 @@
 #}
 
 # Keep Room entities, DAOs and database (only needed if minify is enabled).
--keep class com.example.data.local.** { *; }
+-keep class com.paperadda.app.data.local.** { *; }
 -keep @androidx.room.Entity class *
 -keep @androidx.room.Dao class *
 -keep @androidx.room.Database class *
