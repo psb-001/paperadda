@@ -1,8 +1,10 @@
 package com.paperadda.app.data.repository
 
 import android.content.Context
+import com.paperadda.app.data.remote.HttpSupport
 import com.paperadda.app.data.remote.SupabaseConfig
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.UnknownHostException
 import java.util.UUID
@@ -71,21 +73,13 @@ class ContentRequestRepository(context: Context) {
     }
 
     private suspend fun call(action: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
-        var connection: HttpsURLConnection? = null
+        var connection: HttpURLConnection? = null
         try {
-            connection = URL("${SupabaseConfig.URL}/functions/v1/content-requests").openConnection() as HttpsURLConnection
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 10000
-            connection.readTimeout = 20000
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.setRequestProperty("Accept", "application/json")
-            payload.put("action", action)
-            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            val url = URL("${SupabaseConfig.URL}/functions/v1/content-requests")
+            connection = HttpSupport.postJson(url, apiKey = null, body = payload.put("action", action))
 
             val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            val body = HttpSupport.readBody(connection)
             if (status !in 200..299) {
                 val message = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
                 throw IOException(message.ifBlank { "Request failed ($status)" })

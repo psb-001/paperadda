@@ -1,12 +1,13 @@
 package com.paperadda.app.data.repository
 
 import android.content.Context
+import com.paperadda.app.data.remote.HttpSupport
 import com.paperadda.app.data.remote.SupabaseConfig
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.UnknownHostException
 import java.util.UUID
-import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -38,21 +39,17 @@ class FeedbackRepository(private val context: Context) {
     }
 
     private suspend fun call(payload: JSONObject) = withContext(Dispatchers.IO) {
-        var connection: HttpsURLConnection? = null
+        var connection: HttpURLConnection? = null
         try {
-            connection = URL("${SupabaseConfig.URL}/functions/v1/feedback").openConnection() as HttpsURLConnection
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 10000
-            connection.readTimeout = 20000
-            connection.doOutput = true
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.setRequestProperty("Accept", "application/json")
-            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            connection = HttpSupport.postJson(
+                URL("${SupabaseConfig.URL}/functions/v1/feedback"),
+                apiKey = null,
+                body = payload
+            )
 
             val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
             if (status !in 200..299) {
+                val body = HttpSupport.readBody(connection)
                 val message = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
                 throw IOException(message.ifBlank { "Feedback failed ($status)" })
             }

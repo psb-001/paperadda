@@ -40,23 +40,81 @@ import java.io.IOException
 internal fun downloadNameToken(raw: String): String =
     raw.trim().replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_', '.', '-')
 
+/**
+ * On-disk name for a downloaded paper.
+ *
+ * The paper id is part of the name on purpose. Before it was added, the name
+ * was branch + subject + year, and the published catalog has 75 papers that
+ * map to only 21 such names — every second paper of the same subject and year
+ * silently overwrote the first, so students lost a PDF they had already
+ * downloaded. Ids are unique per paper, so two papers can never share a path.
+ */
+/**
+ * True when [file] really is a PDF.
+ *
+ * Storage returns whatever an admin uploaded, and a signed-in portal HTML page
+ * saved under a .pdf name is indistinguishable from a broken PDF to the reader.
+ * The check follows the spec: the header may be preceded by up to 1024 bytes of
+ * other content.
+ */
+internal fun isPdfContent(file: File): Boolean = try {
+    if (file.length() < 5) return false
+    file.inputStream().use { input ->
+        val head = ByteArray(1024)
+        val read = input.read(head)
+        if (read < 5) return false
+        // ISO-8859-1 decodes bytes one-for-one, so the ASCII header matches
+        // whatever else the file is.
+        String(head, 0, read, Charsets.ISO_8859_1).contains("%PDF-")
+    }
+} catch (e: Exception) {
+    false
+}
+
+internal fun downloadFileName(paper: QuestionPaper): String {
+    val base = listOf(
+        downloadNameToken(paper.branchCode),
+        downloadNameToken(paper.subjectName),
+        downloadNameToken(paper.year),
+        downloadNameToken(paper.id)
+    ).joinToString("_")
+    return "${base.ifBlank { "paper" }}.pdf"
+}
+
+/**
+ * The pre-id name, still on disk for papers downloaded by older builds. Read
+ * only: new downloads use [downloadFileName].
+ */
+internal fun legacyDownloadFileName(paper: QuestionPaper): String =
+    listOf(
+        downloadNameToken(paper.branchCode),
+        downloadNameToken(paper.subjectName),
+        downloadNameToken(paper.year)
+    ).joinToString("_") + ".pdf"
+
 internal fun buildConfinedDownloadFile(
     downloadDir: File,
-    branchCode: String,
-    subjectName: String,
-    year: String
+    paper: QuestionPaper,
+    legacy: Boolean = false
 ): File {
-    fun safe(raw: String): String {
-        val cleaned = downloadNameToken(raw)
-        return cleaned.ifBlank { "item" }.take(80)
-    }
-    val fileName = "${safe(branchCode)}_${safe(subjectName)}_${safe(year)}.pdf"
+    val fileName = if (legacy) legacyDownloadFileName(paper) else downloadFileName(paper)
     val file = File(downloadDir, fileName)
     require(file.canonicalPath == downloadDir.canonicalPath + File.separator + file.name) {
         "Unsafe paper file name rejected"
     }
     return file
 }
+
+/**
+ * The file for [paper] if it has been downloaded: the current name first, then
+ * the legacy one, so papers saved by an older build still open instead of
+ * downloading again.
+ */
+internal fun existingDownloadFile(downloadDir: File, paper: QuestionPaper): File? =
+    listOf(
+        buildConfinedDownloadFile(downloadDir, paper, legacy = false),
+        buildConfinedDownloadFile(downloadDir, paper, legacy = true)
+    ).firstOrNull { it.exists() && it.length() > 0 }
 
 class PaperRepository(
     private val paperDao: PaperDao,
@@ -289,8 +347,7 @@ private fun countKey(subjectName: String, branchCode: String): String =
      */
     fun cachedFileFor(paper: QuestionPaper): File? = try {
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
-        val f = buildConfinedDownloadFile(dir, paper.branchCode, paper.subjectName, paper.year)
-        if (f.exists() && f.length() > 0) f else null
+        existingDownloadFile(dir, paper)
     } catch (e: Exception) {
         null
     }
@@ -298,13 +355,19 @@ private fun countKey(subjectName: String, branchCode: String): String =
     suspend fun downloadPaper(paper: QuestionPaper): File = withContext(Dispatchers.IO) {
         val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
         // Security: catalog text is admin-influenced (see buildConfinedDownloadFile).
-        val file = buildConfinedDownloadFile(
-            downloadDir, paper.branchCode, paper.subjectName, paper.year
-        )
+        val file = buildConfinedDownloadFile(downloadDir, paper)
 
         // Admin-uploaded PDF on Supabase Storage: download the real file.
         if (paper.storagePath.isNotBlank()) {
             remote.downloadPublicFile(paper.storagePath, file)
+            if (!isPdfContent(file)) {
+                file.delete()
+                throw IOException("That file is not a valid PDF. Please report it.")
+            }
+            // Drop the pre-id copy of this same paper, so the old colliding
+            // name is not left behind taking up space.
+            val legacy = buildConfinedDownloadFile(downloadDir, paper, legacy = true)
+            if (legacy != file && legacy.exists()) legacy.delete()
             paperDao.insertDownloadedPaper(
                 DownloadedPaperEntity(
                     paperId = paper.id,

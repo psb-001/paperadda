@@ -69,8 +69,56 @@ class DownloadedPaperReconcilerTest {
         assertEquals(1, result.restored)
         val row = db.paperDao().getAllDownloadedPapers().first().single()
         assertEquals("recovered:ENTC_Legacy_Paper_2019-20.pdf", row.paperId)
-        assertEquals("Legacy Paper", row.subjectName)
-        assertEquals("2019-20", row.year)
+        assertEquals("ENTC Legacy Paper 2019-20", row.title)
+    }
+
+    /**
+     * The published catalog has several papers per subject and year. Each one
+     * now writes its own file, so each must get its own row rather than all of
+     * them collapsing onto the first match.
+     */
+    @Test
+    fun `several papers of one subject and year each keep their own row`() = runBlocking {
+        val catalog = listOf(
+            paper("c1", "Engineering Chemistry", "COMMON", "2024"),
+            paper("c2", "Engineering Chemistry", "COMMON", "2024"),
+            paper("c3", "Engineering Chemistry", "COMMON", "2024")
+        )
+        writeFile("COMMON_Engineering_Chemistry_2024_c1.pdf")
+        writeFile("COMMON_Engineering_Chemistry_2024_c2.pdf")
+        writeFile("COMMON_Engineering_Chemistry_2024_c3.pdf")
+
+        val result = DownloadedPaperReconciler(db.paperDao()).reconcile(downloadDir, catalog)
+
+        assertEquals(3, result.restored)
+        val ids = db.paperDao().getAllDownloadedPapers().first().map { it.paperId }.sorted()
+        assertEquals(listOf("c1", "c2", "c3"), ids)
+    }
+
+    @Test
+    fun `an id in the file name wins over subject matching`() = runBlocking {
+        // Same subject and year as another paper: only the id tells them apart.
+        val catalog = listOf(
+            paper("c1", "Engineering Chemistry", "COMMON", "2024"),
+            paper("c2", "Engineering Chemistry", "COMMON", "2024")
+        )
+        writeFile("COMMON_Engineering_Chemistry_2024_c2.pdf")
+
+        DownloadedPaperReconciler(db.paperDao()).reconcile(downloadDir, catalog)
+
+        val row = db.paperDao().getAllDownloadedPapers().first().single()
+        assertEquals("c2", row.paperId)
+    }
+
+    @Test
+    fun `pre-id file names still recover through subject matching`() = runBlocking {
+        val catalog = listOf(paper("c1", "Engineering Chemistry", "COMMON", "2024"))
+        writeFile("COMMON_Engineering_Chemistry_2024.pdf")
+
+        val result = DownloadedPaperReconciler(db.paperDao()).reconcile(downloadDir, catalog)
+
+        assertEquals(1, result.restored)
+        assertEquals("c1", db.paperDao().getAllDownloadedPapers().first().single().paperId)
     }
 
     @Test

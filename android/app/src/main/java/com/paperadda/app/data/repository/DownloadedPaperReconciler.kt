@@ -5,104 +5,24 @@ import android.os.Environment
 import com.paperadda.app.data.local.DownloadedPaperEntity
 import com.paperadda.app.data.local.PaperDao
 import com.paperadda.app.data.model.QuestionPaper
-import com.paperadda.app.data.repository.downloadNameToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * A download row rebuilt from a PDF that is still on disk but has no row in
- * `downloaded_papers` (after a database recreation, or a failed insert).
- */
-internal data class RecoveredDownload(
-    val paperId: String,
-    val title: String,
-    val subjectName: String,
-    val branchCode: String,
-    val year: String,
-    val filePath: String,
-    val fileSize: String
-)
-
-/** The three pieces of a download filename: `BRANCH_SUBJECT_YEAR.pdf`. */
-internal data class ParsedDownloadFileName(
-    val branchCode: String,
-    val subjectToken: String,
-    val yearToken: String
-)
-
-/**
- * Parses `BRANCH_SUBJECT_YEAR.pdf` — the name [buildConfinedDownloadFile]
- * produces. Returns null for anything that is not one of our own files.
- *
- * The middle is kept as one underscore-joined token because the sanitiser
- * collapses runs of invalid characters to a single `_`, so the number of
- * original spaces in a subject name cannot be recovered from the name alone.
- * Callers match that token back to catalog text with [matchCatalogPaper].
- */
-internal fun parseDownloadedPdfFileName(fileName: String): ParsedDownloadFileName? {
-    val base = fileName.trim()
-    if (!base.endsWith(".pdf", ignoreCase = true)) return null
-    val stem = base.dropLast(4)
-    if (stem.isBlank()) return null
-    val parts = stem.split("_")
-    if (parts.size < 3) return null
-    return ParsedDownloadFileName(
-        branchCode = parts.first(),
-        subjectToken = parts.subList(1, parts.size - 1).joinToString("_"),
-        yearToken = parts.last()
-    )
-}
-
-/**
- * Finds the catalog paper a recovered file belongs to: same sanitised subject
- * name, then the same year when one matches, otherwise the newest year. Pure
- * so the matching rules can be tested without a database.
- */
-internal fun matchCatalogPaper(
-    papers: List<QuestionPaper>,
-    parsed: ParsedDownloadFileName
-): QuestionPaper? {
-    val subjectMatches = papers.filter {
-        downloadNameToken(it.subjectName).equals(parsed.subjectToken, ignoreCase = true)
-    }
-    if (subjectMatches.isEmpty()) return null
-    subjectMatches.firstOrNull {
-        it.year.trim().equals(parsed.yearToken, ignoreCase = true)
-    }?.let { return it }
-    return subjectMatches.maxByOrNull { it.year }
-}
-
-/** Turns a file plus its catalog match into the row that should exist. */
-internal fun recoveredDownloadFor(
-    file: File,
-    parsed: ParsedDownloadFileName,
-    paper: QuestionPaper?
-): RecoveredDownload {
-    val subject = paper?.subjectName ?: parsed.subjectToken.replace('_', ' ')
-    val year = paper?.year ?: parsed.yearToken
-    return RecoveredDownload(
-        // Prefer the real catalog id: the row then lines up with the paper in
-        // the catalog and every Flow-based UI state is correct again.
-        paperId = paper?.id ?: ("recovered:" + file.name),
-        title = paper?.title ?: "$subject · $year",
-        subjectName = subject,
-        branchCode = paper?.branchCode ?: parsed.branchCode,
-        year = year,
-        filePath = file.absolutePath,
-        fileSize = paper?.fileSize ?: ""
-    )
-}
-
-/**
  * Re-inserts a row for every downloaded PDF that is still on disk but is
  * missing from `downloaded_papers`.
  *
- * This is what makes [com.paperadda.app.data.local.AppDatabase]'s destructive
+ * This is what makes [com.example.data.local.AppDatabase]'s destructive
  * fallback survivable: the PDFs live in the app's external files directory and
- * survive an uninstall-adjacent database wipe, so the index can always be
- * rebuilt from them. Inserts use `OnConflictStrategy.IGNORE`, so running this
- * on every sync is safe and never rewrites an existing row's timestamp.
+ * survive a database wipe, so the index can always be rebuilt from them.
+ * Inserts use `OnConflictStrategy.IGNORE`, so running this on every sync is
+ * safe and never rewrites an existing row's timestamp.
+ *
+ * Files are matched to the catalog by rebuilding each paper's file name with
+ * the same [downloadFileName] the writer uses, rather than by splitting the
+ * name apart: paper slugs contain underscores themselves, so parsing a name
+ * back into pieces is guesswork, but comparing it to every known name is not.
  */
 class DownloadedPaperReconciler(
     private val paperDao: PaperDao
@@ -113,23 +33,31 @@ class DownloadedPaperReconciler(
                 candidate.isFile && candidate.name.endsWith(".pdf", ignoreCase = true)
             }?.sortedBy { it.name } ?: emptyList()
 
+            // Built once per sync: both the current and the legacy name of every
+            // paper, so a file saved by an older build still finds its paper.
+            val known: Map<String, QuestionPaper> = buildMap {
+                for (paper in papers) {
+                    put(downloadFileName(paper).lowercase(), paper)
+                    put(legacyDownloadFileName(paper).lowercase(), paper)
+                }
+            }
+
             var restored = 0
             for (file in files) {
-                val parsed = parseDownloadedPdfFileName(file.name) ?: continue
-                val paper = matchCatalogPaper(papers, parsed)
-                val recovered = recoveredDownloadFor(file, parsed, paper)
-                val inserted = paperDao.insertDownloadedPaperIfAbsent(
+                val paper = known[file.name.lowercase()]
+                val entity = paper?.let {
                     DownloadedPaperEntity(
-                        paperId = recovered.paperId,
-                        title = recovered.title,
-                        subjectName = recovered.subjectName,
-                        branchCode = recovered.branchCode,
-                        year = recovered.year,
-                        filePath = recovered.filePath,
-                        fileSize = recovered.fileSize
+                        paperId = it.id,
+                        title = it.title,
+                        subjectName = it.subjectName,
+                        branchCode = it.branchCode,
+                        year = it.year,
+                        filePath = file.absolutePath,
+                        fileSize = it.fileSize
                     )
-                )
-                if (inserted != -1L) restored++
+                } ?: unknownFileEntity(file) ?: continue
+
+                if (paperDao.insertDownloadedPaperIfAbsent(entity) != -1L) restored++
             }
             ReconcileResult(scanned = files.size, restored = restored)
         }
@@ -137,6 +65,24 @@ class DownloadedPaperReconciler(
     /** The download directory the app writes papers into. */
     fun downloadDir(context: Context): File =
         context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+}
+
+/**
+ * A row for a PDF that no published paper claims. Still worth showing: the
+ * student can open it, and it is no longer invisible in the app's own list.
+ */
+private fun unknownFileEntity(file: File): DownloadedPaperEntity? {
+    val stem = file.name.removeSuffix(".pdf").removeSuffix(".PDF")
+    val readable = stem.replace('_', ' ').trim().ifBlank { return null }
+    return DownloadedPaperEntity(
+        paperId = "recovered:${file.name}",
+        title = readable,
+        subjectName = readable,
+        branchCode = "",
+        year = "",
+        filePath = file.absolutePath,
+        fileSize = ""
+    )
 }
 
 data class ReconcileResult(val scanned: Int, val restored: Int)

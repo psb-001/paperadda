@@ -4,13 +4,19 @@ import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
-import javax.net.ssl.HttpsURLConnection
 import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Read-only client for the Supabase backend (plain HTTPS + org.json,
- * no extra dependencies). All calls throw on failure — callers catch
- * and fall back to the offline Room cache.
+ * no extra dependencies). All calls throw [SupabaseException] on failure —
+ * callers catch and fall back to the offline Room cache.
+ *
+ * Reads are paged with `Range` headers. PostgREST caps a response at the
+ * project's `max_rows` (1000 unless changed), and an unpaged `select=*`
+ * silently returns only the first page — the app would show a complete-looking
+ * catalog that is quietly missing every paper after the cap. Paging also keeps
+ * peak memory bounded on a phone.
  */
 class SupabaseRemoteDataSource {
 
@@ -49,108 +55,181 @@ class SupabaseRemoteDataSource {
         val storagePath: String
     )
 
-    fun fetchSubjects(): List<RemoteSubject> {
-        return getArray("subjects", "id.asc").map { o ->
-            val j = o as org.json.JSONObject
-            RemoteSubject(
-                id = j.getString("id"),
-                name = j.getString("name"),
-                branchCode = j.getString("branch_code"),
-                academicYear = j.optInt("academic_year", 1),
-                paperCount = j.optInt("paper_count", 0),
-                iconName = j.optString("icon_name", "graphic_eq")
-            )
-        }
+    fun fetchSubjects(): List<RemoteSubject> = fetchTable(
+        table = "subjects",
+        order = stableOrderClause("id.asc")
+    ) { json ->
+        RemoteSubject(
+            id = json.requiredString("id"),
+            name = json.requiredString("name"),
+            branchCode = json.requiredString("branch_code"),
+            academicYear = json.optInt("academic_year", 1),
+            paperCount = json.optInt("paper_count", 0),
+            iconName = json.optString("icon_name", "graphic_eq")
+        )
     }
 
-    fun fetchPapers(): List<RemotePaper> {
-        return getArray("papers", "year.desc").map { o ->
-            val j = o as org.json.JSONObject
-            val samples = mutableListOf<String>()
-            val arr = j.optJSONArray("sample_questions")
-            if (arr != null) {
-                for (i in 0 until arr.length()) samples.add(arr.optString(i))
+    fun fetchPapers(): List<RemotePaper> = fetchTable(
+        table = "papers",
+        order = stableOrderClause("year.desc")
+    ) { json ->
+        val samples = mutableListOf<String>()
+        val arr = json.optJSONArray("sample_questions")
+        if (arr != null) {
+            for (i in 0 until arr.length()) samples.add(arr.optString(i))
+        }
+        RemotePaper(
+            id = json.requiredString("id"),
+            title = json.requiredString("title"),
+            subjectName = json.requiredString("subject_name"),
+            branchCode = json.requiredString("branch_code"),
+            year = json.requiredString("year"),
+            examType = json.optString("exam_type", "End Semester Examination"),
+            fileFormat = json.optString("file_format", "PDF"),
+            fileSize = json.optString("file_size", ""),
+            duration = json.optString("duration", "3 Hours"),
+            maxMarks = json.optInt("max_marks", 100),
+            sampleQuestions = samples,
+            storagePath = json.optString("storage_path", "")
+        )
+    }
+
+    fun fetchNotes(): List<RemoteNote> = fetchTable(
+        table = "notes",
+        order = stableOrderClause("updated_at.desc")
+    ) { json ->
+        RemoteNote(
+            id = if (json.isNull("id")) null else json.optLong("id"),
+            title = json.requiredString("title"),
+            content = json.optString("content", ""),
+            subjectName = json.optString("subject_name", ""),
+            branchCode = json.optString("branch_code", ""),
+            academicYear = json.optInt("academic_year", 1),
+            fileUrl = json.optString("file_url", ""),
+            storagePath = json.optString("storage_path", "")
+        )
+    }
+
+    /**
+     * Reads a whole table, page by page, applying [map] to every row.
+     * Transient failures (offline, 5xx, 429) are retried with backoff.
+     */
+    private fun <T> fetchTable(
+        table: String,
+        order: String,
+        map: (JSONObject) -> T
+    ): List<T> = HttpSupport.withRetry {
+        val out = ArrayList<T>(HttpSupport.PAGE_SIZE)
+        var offset = 0
+        while (offset / HttpSupport.PAGE_SIZE < HttpSupport.MAX_PAGES) {
+            val page = fetchPage(table, order, offset, map)
+            out.addAll(page)
+            if (HttpSupport.isLastPage(page.size)) break
+            offset += HttpSupport.PAGE_SIZE
+        }
+        out
+    }
+
+    private fun <T> fetchPage(
+        table: String,
+        order: String,
+        offset: Int,
+        map: (JSONObject) -> T
+    ): List<T> {
+        val url = URL(
+            "${SupabaseConfig.URL}/rest/v1/$table?select=*&order=$order"
+        )
+        val connection = HttpSupport.get(
+            url = url,
+            apiKey = SupabaseConfig.ANON_KEY,
+            range = HttpSupport.rangeHeader(offset)
+        )
+        try {
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                throw failure(status, HttpSupport.readBody(connection))
             }
-            RemotePaper(
-                id = j.getString("id"),
-                title = j.getString("title"),
-                subjectName = j.getString("subject_name"),
-                branchCode = j.getString("branch_code"),
-                year = j.getString("year"),
-                examType = j.optString("exam_type", "End Semester Examination"),
-                fileFormat = j.optString("file_format", "PDF"),
-                fileSize = j.optString("file_size", ""),
-                duration = j.optString("duration", "3 Hours"),
-                maxMarks = j.optInt("max_marks", 100),
-                sampleQuestions = samples,
-                storagePath = j.optString("storage_path", "")
-            )
-        }
-    }
-
-    fun fetchNotes(): List<RemoteNote> {
-        return getArray("notes", "updated_at.desc").map { o ->
-            val j = o as org.json.JSONObject
-            RemoteNote(
-                id = if (j.isNull("id")) null else j.optLong("id"),
-                title = j.getString("title"),
-                content = j.optString("content", ""),
-                subjectName = j.optString("subject_name", ""),
-                branchCode = j.optString("branch_code", ""),
-                academicYear = j.optInt("academic_year", 1),
-                fileUrl = j.optString("file_url", ""),
-                storagePath = j.optString("storage_path", "")
-            )
+            val array = JSONArray(HttpSupport.readBody(connection))
+            return (0 until array.length()).map { map(array.getJSONObject(it)) }
+        } catch (e: Exception) {
+            throw HttpSupport.failureFor(e)
+        } finally {
+            connection.disconnect()
         }
     }
 
     /** Download a file from the public `papers` bucket into [dest]. */
-    fun downloadPublicFile(storagePath: String, dest: File) {
+    fun downloadPublicFile(storagePath: String, dest: File) = HttpSupport.withRetry {
         val url = URL("${SupabaseConfig.URL}/storage/v1/object/public/papers/$storagePath")
-        val conn = (url.openConnection() as HttpsURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 60000
-            setRequestProperty("apikey", SupabaseConfig.ANON_KEY)
-        }
+        val connection = HttpSupport.get(
+            url = url,
+            apiKey = SupabaseConfig.ANON_KEY,
+            // Storage authorises the bucket by anon key alone; sending a bearer
+            // token here would only confuse it.
+            useAuthHeader = false
+        )
+        connection.connectTimeout = HttpSupport.DOWNLOAD_CONNECT_TIMEOUT_MS
+        connection.readTimeout = HttpSupport.DOWNLOAD_READ_TIMEOUT_MS
         try {
-            if (conn.responseCode !in 200..299) {
-                throw java.io.IOException("Download failed: HTTP ${conn.responseCode}")
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                throw failure(status, HttpSupport.readBody(connection))
             }
-            conn.inputStream.use { input ->
-                FileOutputStream(dest).use { output -> input.copyTo(output) }
+            FileOutputStream(dest).use { output ->
+                HttpSupport.copyTo(connection, output)
             }
+        } catch (e: Exception) {
+            throw HttpSupport.failureFor(e)
         } finally {
-            conn.disconnect()
+            connection.disconnect()
         }
     }
 
     fun publicFileUrl(storagePath: String): String =
         "${SupabaseConfig.URL}/storage/v1/object/public/papers/$storagePath"
 
-    private fun getArray(table: String, order: String): List<Any> {
-        val url = URL("${SupabaseConfig.URL}/rest/v1/$table?select=*&order=$order")
-        val conn = (url.openConnection() as HttpsURLConnection).apply {
-            connectTimeout = 8000
-            readTimeout = 15000
-            setRequestProperty("apikey", SupabaseConfig.ANON_KEY)
-            setRequestProperty("Authorization", "Bearer ${SupabaseConfig.ANON_KEY}")
+    private fun failure(status: Int, body: String): SupabaseException {
+        val kind = HttpSupport.classifyStatus(status)
+        val detail = HttpSupport.summarizeErrorBody(body)
+        val message = when {
+            detail.isEmpty() && kind == SyncFailure.OFFLINE ->
+                "Couldn't reach PaperAdda's library. Check your connection."
+            detail.isEmpty() -> "PaperAdda's library is unavailable (HTTP $status)."
+            else -> "PaperAdda's library is unavailable (HTTP $status): $detail"
         }
-        try {
-            if (conn.responseCode !in 200..299) {
-                throw java.io.IOException("Sync failed: HTTP ${conn.responseCode}")
-            }
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val arr = JSONArray(body)
-            return (0 until arr.length()).map { arr.get(it) as Any }
-        } finally {
-            conn.disconnect()
-        }
+        return SupabaseException(kind, message)
     }
 
     companion object {
         private const val TAG = "SupabaseSync"
+
+        /** A missing id/name is a data problem, not something to guess around. */
+        private fun JSONObject.requiredString(key: String): String {
+            val value = optString(key)
+            if (value.isBlank()) {
+                throw SupabaseException(
+                    SyncFailure.MALFORMED,
+                    "The library returned an incomplete record (missing \"$key\")."
+                )
+            }
+            return value
+        }
+
         fun logSyncError(e: Exception) {
-            Log.w(TAG, "Remote sync unavailable, using offline cache: ${e.message}")
+            val kind = (e as? SupabaseException)?.failure?.name ?: "other"
+            Log.w(TAG, "Remote sync unavailable ($kind), using offline cache: ${e.message}")
         }
     }
 }
+
+/**
+ * Order clause for a paged read.
+ *
+ * The sort key must be unique. `ORDER BY` on a column with ties is not stable
+ * across separate requests, so paging by one repeats some rows and skips
+ * others — measured against the live backend: 75 papers paged by `year.desc`
+ * at 30 rows a page came back as 70 distinct ids, with 5 papers missing.
+ * `id` is unique per row, so it is appended as the tiebreaker.
+ * Top-level + internal so the rule is unit-tested without a network.
+ */
+internal fun stableOrderClause(primary: String): String = "$primary,id.asc"

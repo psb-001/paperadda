@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HTTPS is the only transport PaperAdda uses. Stating it explicitly (rather than
+  relying on the platform default, which has been false since API 28) means a
+  future http:// URL fails loudly at build/test time instead of silently
+  downgrading a user's traffic.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

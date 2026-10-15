@@ -27,6 +27,7 @@ import com.paperadda.app.data.repository.PaperRepository
 import com.paperadda.app.data.repository.UpdateInstaller
 import com.paperadda.app.data.repository.FileExporter
 import com.paperadda.app.data.repository.UpdateRepository
+import com.paperadda.app.data.repository.isPdfContent
 import com.paperadda.app.data.update.UpdateManager
 import com.paperadda.app.ui.components.NavDestination
 import com.paperadda.app.ui.navigation.AppScreen
@@ -38,6 +39,32 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
+
+/**
+ * Upper bounds on user-supplied text. The server validates too; these stop a
+ * phone from uploading something absurd before the request even leaves.
+ */
+private const val REQUEST_TITLE_MAX = 120
+private const val REQUEST_DETAILS_MAX = 1000
+private const val FEEDBACK_MESSAGE_MAX = 2000
+private const val EMAIL_MAX = 254
+
+/**
+ * A pragmatic address check: one @, a dot-bearing domain, no spaces. Deliberately
+ * loose — the goal is catching typos, not rejecting a valid new TLD.
+ * Pure JVM so it is unit-tested without Android.
+ */
+internal fun isPlausibleEmail(raw: String): Boolean {
+    val email = raw.trim()
+    if (email.length > EMAIL_MAX) return false
+    if (email.any { it.isWhitespace() }) return false
+    val parts = email.split("@")
+    if (parts.size != 2) return false
+    val (local, domain) = parts
+    if (local.isEmpty() || domain.isEmpty()) return false
+    if (!domain.contains('.') || domain.startsWith('.') || domain.endsWith('.')) return false
+    return domain.none { it.isWhitespace() }
+}
 
 /**
  * Gate for the legacy note `fileUrl` branch of [MainViewModel.openNotePdf].
@@ -256,10 +283,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         if (isSubmittingRequest) return
-        if (title.trim().length < 2) {
-            requestFeedback = "Enter a subject or title"
-            requestFeedbackIsError = true
-            return
+        val cleanTitle = title.trim()
+        val cleanDetails = details.trim()
+        when {
+            cleanTitle.length < 2 -> {
+                requestFeedback = "Enter a subject or title"
+                requestFeedbackIsError = true
+                return
+            }
+            // Caps are not the server's job alone: a phone with a stalled
+            // connection should not upload 100 KB of typing by accident.
+            cleanTitle.length > REQUEST_TITLE_MAX -> {
+                requestFeedback = "Keep the title under $REQUEST_TITLE_MAX characters"
+                requestFeedbackIsError = true
+                return
+            }
+            cleanDetails.length > REQUEST_DETAILS_MAX -> {
+                requestFeedback = "Keep the details under $REQUEST_DETAILS_MAX characters"
+                requestFeedbackIsError = true
+                return
+            }
         }
         isSubmittingRequest = true
         viewModelScope.launch {
@@ -268,8 +311,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     kind = kind,
                     branchCode = branchCode,
                     academicYear = academicYear,
-                    title = title.trim(),
-                    details = details.trim()
+                    title = cleanTitle,
+                    details = cleanDetails
                 )
                 contentRequests.value = listOf(submitted) + contentRequests.value
                 requestFeedback = "Request sent to the PaperAdda team"
@@ -309,16 +352,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit
     ) {
         if (isSubmittingFeedback) return
-        if (message.trim().length < 10) {
-            feedbackMessage = "Please write at least 10 characters"
-            feedbackMessageIsError = true
-            return
+        val cleanMessage = message.trim()
+        val cleanEmail = email.trim()
+        when {
+            cleanMessage.length < 10 -> {
+                feedbackMessage = "Please write at least 10 characters"
+                feedbackMessageIsError = true
+                return
+            }
+            cleanMessage.length > FEEDBACK_MESSAGE_MAX -> {
+                feedbackMessage = "Keep your feedback under $FEEDBACK_MESSAGE_MAX characters"
+                feedbackMessageIsError = true
+                return
+            }
+            cleanEmail.isNotEmpty() && !isPlausibleEmail(cleanEmail) -> {
+                feedbackMessage = "That email address doesn't look right"
+                feedbackMessageIsError = true
+                return
+            }
         }
         isSubmittingFeedback = true
         feedbackMessage = null
         viewModelScope.launch {
             try {
-                feedbackRepository.submitFeedback(category, message.trim(), email.trim())
+                feedbackRepository.submitFeedback(category, cleanMessage, cleanEmail)
                 feedbackMessage = "Thanks — your feedback was sent"
                 feedbackMessageIsError = false
                 onSuccess()
@@ -589,18 +646,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val app = getApplication<Application>()
                     val downloadDir = app.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS)
                         ?: app.filesDir
-                    val safeName = note.title
+                    // The note id is part of the name: two notes can share a
+                    // title, and a shared name would overwrite the earlier PDF.
+                    val safeName = "${note.title
                         .trim()
                         .replace(Regex("[^A-Za-z0-9._-]+"), "_")
                         .trim('_', '.', '-')
                         .ifBlank { "note" }
-                        .take(80) + ".pdf"
+                        .take(60)}_${note.id}.pdf"
                     val file = File(downloadDir, safeName)
                     // Catalog text is admin-influenced — keep the file inside downloadDir.
                     require(file.canonicalPath == downloadDir.canonicalPath + File.separator + file.name) {
                         "Unsafe note file name rejected"
                     }
                     remote.downloadPublicFile(note.storagePath, file)
+                    if (!isPdfContent(file)) {
+                        file.delete()
+                        Toast.makeText(
+                            getApplication(),
+                            "That note is not a valid PDF. Please report it.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
                     openPdfReader(file, note.subjectName.ifBlank { note.title })
                 } catch (e: Exception) {
                     Toast.makeText(

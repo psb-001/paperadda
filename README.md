@@ -87,6 +87,43 @@ sideloaded APK gets no store update path. A release body may carry
   download index from the PDFs still on disk, and the catalog re-syncs on next
   launch.
 
+### Backend connectivity (Supabase)
+
+The REST client (`data/remote`) is plain HTTPS + `org.json` — no HTTP
+dependency. What it guarantees:
+
+- **Paged reads.** Reads use `Range` headers in pages of 500. PostgREST caps a
+  response at the project's `max_rows` (1000 by default) and an unpaged
+  `select=*` silently returns only the first page — the app would have shown a
+  complete-looking catalog quietly missing every paper past the cap.
+- **Retries with backoff** for transient failures only (offline, 5xx, 429). A
+  401/403 or a malformed row is deterministic, so it is never retried.
+- **Timeouts and gzip** on every connection, and one `SupabaseException` type
+  whose message is already student-readable, which is what the sync banner
+  shows.
+- **HTTPS only**, enforced by `res/xml/network_security_config.xml` rather than
+  relying on the platform default.
+- **Uploaded files are checked.** A download must start with `%PDF-` (the spec
+  allows up to 1024 leading bytes); otherwise it is deleted and reported instead
+  of being shown as a broken paper.
+
+### Known backend issues to fix in Supabase (not in this repo)
+
+These need the dashboard/functions, so they are written down here rather than
+fixed in the client:
+
+1. **`content-requests` and `feedback` trust a client-generated key.** The app
+   sends a random `requesterKey` / `feedbackKey` stored in `SharedPreferences`,
+   and the functions use it as the caller's identity for `list` and `delete`.
+   Anyone who learns another user's key can read or delete their requests.
+   Fix: require a Supabase auth session, derive identity from the JWT
+   (`auth.uid()`), and rate-limit the endpoints. Until then, treat request
+   contents as low-sensitivity.
+2. **JWT verification.** Both functions answer without an `apikey` header, which
+   means they run with `verify_jwt` disabled. That is acceptable only while the
+   functions validate every input themselves and write through RLS-safe paths;
+   turning verification back on requires the client to send the anon key.
+
 ## Release (Android)
 
 Release builds **require** a keystore — they will fail (not debug-sign) if it is missing.

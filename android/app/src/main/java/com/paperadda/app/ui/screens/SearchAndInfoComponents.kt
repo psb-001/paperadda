@@ -308,10 +308,10 @@ fun InfoBottomSheet(
             Spacer(modifier = Modifier.height(8.dp))
 
             TeamMemberRow(
-                name = "Atharvatsa Ugale",
+                name = "Atharv Chougule",
                 role = "Contributor",
-                githubUrl = null,
-                linkedinUrl = null
+                githubUrl = "https://github.com/Atharv-052007",
+                linkedinUrl = "https://www.linkedin.com/in/atharv-chougule-626452393?utm_source=share_via&utm_content=profile&utm_medium=member_android"
             )
 
             Spacer(modifier = Modifier.height(24.dp))
