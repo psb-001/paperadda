@@ -719,7 +719,7 @@ private fun PageJumpDialog(
 private fun bucketFor(scale: Float): Float = if (scale > HI_RES_THRESHOLD) 2f else 1f
 
 private const val PRELOAD = 1
-private const val PREFETCH = 1
+private const val PREFETCH = 2
 private const val MIN_SCALE = 1f
 private const val MAX_SCALE = 4f
 private const val ZOOM_STEP = 1.4f

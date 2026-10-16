@@ -12,6 +12,7 @@
 const DB = (() => {
   const base = SUPABASE.url;
   const BUCKET = "papers";
+  const PAGE = 500;
   const SESSION_KEY = "paperadda-admin-session";
 
   let session = null;
@@ -228,11 +229,36 @@ const DB = (() => {
   const open = async () => true; // nothing local to open; session validated at boot
 
   const getAll = async (table) => {
-    const order = table === "papers" ? "year.desc"
-      : table === "notes" ? "updated_at.desc"
-      : "id.asc";
-    const rows = await api(`/rest/v1/${table}?select=*&order=${order}`, {});
-    return (rows || []).map((r) => fromRow(table, r));
+    // PostgREST caps an unpaged response at max_rows (1000 by default) and
+    // returns rows in arbitrary order within a tie. Paging with Range headers
+    // plus a unique id.asc tiebreaker means we never silently skip or repeat
+    // rows, no matter how large the catalog grows.
+    const order =
+      table === "papers"
+        ? "year.desc,id.asc"
+        : table === "notes"
+          ? "updated_at.desc,id.asc"
+          : "id.asc";
+    const rows = [];
+    let offset = 0;
+    while (true) {
+      const res = await fetch(`${base}/rest/v1/${table}?select=*&order=${order}`, {
+        method: "GET",
+        headers: {
+          apikey: SUPABASE.anonKey,
+          Authorization: "Bearer " + SUPABASE.anonKey,
+          Range: `${offset}-${offset + PAGE - 1}`,
+        },
+      });
+      if (!res.ok) throw new Error("Request failed (" + res.status + ")");
+      const text = await res.text();
+      const page = text ? JSON.parse(text) : [];
+      const got = (page || []).map((r) => fromRow(table, r));
+      rows.push(...got);
+      if (got.length < PAGE) break;
+      offset += PAGE;
+    }
+    return rows;
   };
 
   const put = async (table, obj) => {
