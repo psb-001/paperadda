@@ -3,12 +3,11 @@ package com.paperadda.app.data.repository
 import android.content.Context
 import com.paperadda.app.data.remote.HttpSupport
 import com.paperadda.app.data.remote.SupabaseConfig
+import com.paperadda.app.data.remote.SupabaseException
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.UnknownHostException
 import java.util.UUID
-import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -81,12 +80,13 @@ class ContentRequestRepository(context: Context) {
             val status = connection.responseCode
             val body = HttpSupport.readBody(connection)
             if (status !in 200..299) {
-                val message = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
-                throw IOException(message.ifBlank { "Request failed ($status)" })
+                throw HttpSupport.failureFor(
+                    SupabaseException(HttpSupport.classifyStatus(status), HttpSupport.summarizeErrorBody(body))
+                )
             }
             JSONObject(body)
-        } catch (error: UnknownHostException) {
-            throw IOException("No internet connection. Check your network and try again.", error)
+        } catch (e: Exception) {
+            throw HttpSupport.failureFor(e)
         } finally {
             connection?.disconnect()
         }

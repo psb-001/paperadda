@@ -3,10 +3,10 @@ package com.paperadda.app.data.repository
 import android.content.Context
 import com.paperadda.app.data.remote.HttpSupport
 import com.paperadda.app.data.remote.SupabaseConfig
+import com.paperadda.app.data.remote.SupabaseException
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
-import java.net.UnknownHostException
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,11 +50,12 @@ class FeedbackRepository(private val context: Context) {
             val status = connection.responseCode
             if (status !in 200..299) {
                 val body = HttpSupport.readBody(connection)
-                val message = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
-                throw IOException(message.ifBlank { "Feedback failed ($status)" })
+                throw HttpSupport.failureFor(
+                    SupabaseException(HttpSupport.classifyStatus(status), HttpSupport.summarizeErrorBody(body))
+                )
             }
-        } catch (error: UnknownHostException) {
-            throw IOException("No internet connection. Check your network and try again.", error)
+        } catch (e: Exception) {
+            throw HttpSupport.failureFor(e)
         } finally {
             connection?.disconnect()
         }

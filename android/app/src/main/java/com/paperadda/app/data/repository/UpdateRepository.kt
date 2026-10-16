@@ -5,10 +5,11 @@ import android.util.Log
 import com.paperadda.app.data.model.AppRelease
 import com.paperadda.app.data.model.compareVersions
 import com.paperadda.app.data.model.normalizeVersion
+import com.paperadda.app.data.remote.HttpSupport
+import com.paperadda.app.data.remote.SupabaseConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.net.HttpURLConnection
 import java.net.URL
 
 /**
@@ -82,16 +83,14 @@ class UpdateRepository(
 
     private fun fetchLatestRelease(): AppRelease? {
         val url = URL("https://api.github.com/repos/$repoOwner/$repoName/releases/latest")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8000
-            readTimeout = 15000
-            requestMethod = "GET"
-            // GitHub rejects requests without a User-Agent.
-            setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "PaperAdda-Android")
-        }
+        val connection = HttpSupport.get(
+            url = url,
+            apiKey = SupabaseConfig.ANON_KEY,
+            useAuthHeader = false,
+            extraHeaders = mapOf("Accept" to "application/vnd.github+json")
+        )
         try {
-            val code = conn.responseCode
+            val code = connection.responseCode
             if (code == 404) {
                 Log.i(TAG, "No GitHub release published yet")
                 return null
@@ -104,10 +103,13 @@ class UpdateRepository(
                 Log.w(TAG, "GitHub returned HTTP $code")
                 return null
             }
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val body = HttpSupport.readBody(connection)
             return parseRelease(body)
+        } catch (e: Exception) {
+            Log.w(TAG, "Update check failed", e)
+            return null
         } finally {
-            conn.disconnect()
+            connection.disconnect()
         }
     }
 

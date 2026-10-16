@@ -71,12 +71,14 @@ internal object HttpSupport {
     /**
      * Opens a GET connection to [url] with auth, gzip and timeouts applied.
      * [range] adds a `Range: bytes`/`rows` style header for paged reads.
+     * [extraHeaders] are applied last, so callers can override defaults.
      */
     fun get(
         url: URL,
         apiKey: String,
         useAuthHeader: Boolean = true,
-        range: String? = null
+        range: String? = null,
+        extraHeaders: Map<String, String> = emptyMap()
     ): HttpURLConnection = open(url) {
         setRequestProperty("apikey", apiKey)
         if (useAuthHeader) setRequestProperty("Authorization", "Bearer $apiKey")
@@ -84,6 +86,7 @@ internal object HttpSupport {
         setRequestProperty("Accept-Encoding", "gzip")
         setRequestProperty("User-Agent", "PaperAdda-Android")
         if (range != null) setRequestProperty("Range", range)
+        extraHeaders.forEach { (k, v) -> setRequestProperty(k, v) }
     }
 
     /** Opens a POST connection with a JSON body already sized and written. */
