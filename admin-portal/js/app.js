@@ -13,8 +13,10 @@ const state = {
   notes: [],
   requests: [],
   feedback: [],
+  releases: [],
   requestLoadError: "",
   feedbackLoadError: "",
+  releaseLoadError: "",
   paperFilter: { branch: "", q: "" },
   subjectFilter: { branch: "", year: "" },
   noteFilter: { branch: "", subject: "", q: "" },
@@ -239,6 +241,16 @@ async function reloadAll() {
     if (isSessionError(err)) throw err;
     feedbackLoadError = err.message || "Could not load feedback";
   }
+  let releases = [];
+  let releaseLoadError = "";
+  try {
+    releases = await DB.listReleases();
+  } catch (err) {
+    if (isSessionError(err)) throw err;
+    releaseLoadError = err.message || "Could not load releases";
+  }
+  state.releases = releases;
+  state.releaseLoadError = releaseLoadError;
   state.subjects = subjects.sort((a, b) =>
     a.branchCode.localeCompare(b.branchCode) ||
     a.academicYear - b.academicYear ||
@@ -1800,6 +1812,175 @@ function deleteFeedbackItem(id) {
       renderFeedback();
     }
   );
+}
+
+/* ============================================================
+ * RELEASES — publish app updates via GitHub Releases
+ * ============================================================ */
+function renderReleases() {
+  $("#viewTitle").textContent = "Releases";
+  $("#viewSubtitle").textContent = "App updates students download from GitHub Releases";
+  $("#topbarActions").innerHTML = `<button class="btn" id="btnNewRelease">+ New release</button>`;
+  $("#btnNewRelease").addEventListener("click", () => openReleaseModal(null));
+
+  const hasToken = GITHUB && GITHUB.token && GITHUB.token !== "YOUR_GITHUB_TOKEN";
+
+  if (!hasToken) {
+    $("#view-releases").innerHTML = `
+      <div class="panel">
+        <h3>GitHub Releases</h3>
+        <p class="muted">Set <code>GITHUB.token</code> in <code>admin-portal/js/config.js</code> to publish and manage releases.</p>
+        <p class="muted">Create a classic personal access token (repo scope) at github.com/settings/tokens.</p>
+      </div>`;
+    return;
+  }
+
+  const releases = (state.releases || []).sort((a, b) => Date.parse(b.published_at || 0) - Date.parse(a.published_at || 0));
+
+  $("#view-releases").innerHTML = `
+    <div class="panel">
+      <div class="filters">
+        <span class="badge ${releases.some(r => isRequired(r)) ? "red" : "grey"}">
+          ${releases.filter(isRequired).length} required
+        </span>
+        <span class="badge grey">${releases.length} release${releases.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Version</th><th>Tag</th><th>Required</th><th>Assets</th><th>Published</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${releases.length === 0
+            ? `<tr><td colspan="6" class="empty"><strong>No releases yet</strong>Publish your first release from here.</td></tr>`
+            : releases.map((r) => `
+          <tr>
+            <td><b>${esc(r.name || r.tag_name)}</b></td>
+            <td><span class="badge">${esc(r.tag_name)}</span></td>
+            <td><span class="badge ${isRequired(r) ? "red" : "grey"}">${isRequired(r) ? "Yes" : "No"}</span></td>
+            <td>${(r.assets || []).length} file${(r.assets || []).length === 1 ? "" : "s"}</td>
+            <td>${fmtDate(r.published_at)}</td>
+            <td><div class="row-actions">
+              <button class="btn secondary small" data-act="edit" data-id="${esc(r.id)}" title="Edit notes / required">✎</button>
+              <button class="btn danger small" data-act="del" data-id="${esc(r.id)}" title="Delete release">🗑</button>
+            </div></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <p class="muted" style="margin:12px 0 0">${releases.length} release${releases.length === 1 ? "" : "s"}</p>
+    </div>`;
+
+  $("#view-releases").querySelectorAll("[data-act='edit']").forEach((b) => {
+    b.addEventListener("click", () => {
+      const r = state.releases.find((x) => x.id === b.dataset.id);
+      if (r) openReleaseModal(r);
+    });
+  });
+  $("#view-releases").querySelectorAll("[data-act='del']").forEach((b) => {
+    b.addEventListener("click", () => {
+      const r = state.releases.find((x) => x.id === b.dataset.id);
+      if (r) deleteRelease(r);
+    });
+  });
+}
+
+function isRequired(release) {
+  return Boolean(release.body && DB.parseMinSupported(release.body));
+}
+
+async function loadReleases() {
+  try {
+    state.releases = await DB.listReleases();
+    state.releaseLoadError = "";
+  } catch (err) {
+    state.releaseLoadError = err.message || "Could not load releases";
+    state.releases = [];
+  }
+}
+
+async function openReleaseModal(existing) {
+  const isEdit = Boolean(existing);
+  const tag = existing ? existing.tag_name : "";
+  const name = existing ? (existing.name || "") : "";
+  const body = existing ? (existing.body || "") : "";
+  const currentMin = DB.parseMinSupported(body || "");
+  const required = isEdit && Boolean(currentMin);
+
+  openModal(existing ? "Edit release" : "New release", `
+    <div class="field"><label>Tag name <span class="muted">(e.g. v1.7)</span></label>
+      <input id="rTag" value="${esc(tag)}" placeholder="v1.7" /></div>
+    <div class="field"><label>Release title <span class="muted">(shown to students)</span></label>
+      <input id="rName" value="${esc(name)}" placeholder="1.7" /></div>
+    <div class="field"><label>Release notes</label>
+      <textarea id="rBody" rows="6">${esc(body || "")}</textarea></div>
+    <div class="field-row">
+      <div class="field"><label>APK file</label>
+        <div class="dropzone" id="rDrop">
+          <strong>Drop APK or browse</strong>
+          <span class="dz-hint">Students download this from GitHub</span>
+          <input type="file" id="rFile" accept=".apk" hidden />
+        </div>
+        <div id="rFileInfo">${existing ? `<div class="file-chip">📄 ${esc((existing.assets || [])[0]?.name || "")} — attached</div>` : `<p class="hint">Attach the signed release APK.</p>`}</div>
+      </div>
+    </div>
+    <div class="field">
+      <label class="check"><input type="checkbox" id="rRequired" ${required ? "checked" : ""} />
+        Required update — students cannot keep using the old version</label>
+      <p class="hint">Adds a <code>min_supported</code> marker so the app forces the update.</p>
+    </div>
+  `, [
+    { label: "Cancel", kind: "secondary" },
+    { label: existing ? "Save changes" : "Publish release", id: "rGo", keepOpen: true, onClick: () => saveRelease(existing) },
+  ]);
+
+  wireDropzone("rDrop", "rFile", "rFileInfo", async (file) => {
+    if (!file.name.toLowerCase().endsWith(".apk")) { toast("Please choose an APK", "err"); return; }
+    state.pendingReleaseFile = file;
+    $("#rFileInfo").innerHTML = `<div class="file-chip">📦 ${esc(file.name)} · ${fmtBytes(file.size)} — ready</div>`;
+  });
+}
+
+async function saveRelease(existing) {
+  const tag = $("#rTag").value.trim();
+  const name = $("#rName").value.trim();
+  let body = $("#rBody").value.trim();
+  const required = $("#rRequired").checked;
+
+  if (!tag) { toast("Tag name is required", "err"); return; }
+  if (!name) { toast("Release title is required", "err"); return; }
+
+  // Apply / remove the min_supported marker
+  body = DB.setMinSupported(body, required ? tag : null);
+
+  let release;
+  if (existing) {
+    release = await DB.editRelease(existing.id, { body });
+  } else {
+    release = await DB.createRelease({ tagName: tag, name, body, isDraft: false, isPrerelease: false });
+  }
+
+  // Upload APK if provided
+  if (state.pendingReleaseFile && release) {
+    try {
+      await DB.uploadReleaseAsset(release.id, state.pendingReleaseFile);
+    } catch (e) {
+      toast(`Release created but APK upload failed: ${e.message}`, "err");
+    }
+  }
+
+  toast(existing ? "Release updated" : "Release published", "ok");
+  await loadReleases();
+  renderReleases();
+  closeModal();
+  state.pendingReleaseFile = null;
+}
+
+async function deleteRelease(release) {
+  confirmDialog("Delete release?", `"${esc(release.tag_name)}` + `" will be removed from GitHub Releases. Students will no longer see it as an update option.`, "Delete", async () => {
+    await DB.deleteRelease(release.id);
+    toast("Release deleted", "ok");
+    await loadReleases();
+    renderReleases();
+  });
 }
 
 /* ============================================================

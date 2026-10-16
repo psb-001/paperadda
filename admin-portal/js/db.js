@@ -339,5 +339,104 @@ const DB = (() => {
 
   const storageEstimate = async () => null; // cloud: shown as connection status instead
 
-  return { open, getAll, put, del, getMeta, putFile, getFile, delFile, fileUrl, exportJSON, importJSON, eraseAllData, storageEstimate, login, logout, loggedIn, updateOwnAccount, listTeam, inviteTeamMember, removeTeamMember, resetTeamPassword, listAllRequests, updateRequest, deleteRequest, listAllFeedback, updateFeedback, deleteFeedback };
+  /* ---------------- GitHub Releases (app update channel) ---------------- */
+  // The Android app checks https://api.github.com/repos/{owner}/{repo}/releases/latest
+  // for updates. A release with an .apk asset is installable; a release body
+  // containing <!-- min_supported: 1.6 --> marks it as required.
+
+  const ghHeaders = () => ({
+    Authorization: "token " + GITHUB.token,
+    Accept: "application/vnd.github+json",
+    "User-Agent": "PaperAdda-Admin",
+  });
+
+  const listReleases = async () => {
+    if (!GITHUB.token || GITHUB.token === "YOUR_GITHUB_TOKEN") return [];
+    const res = await fetch(`https://api.github.com/repos/${GITHUB.repoOwner}/${GITHUB.repoName}/releases`, {
+      headers: ghHeaders(),
+    });
+    if (!res.ok) throw new Error("GitHub releases: " + res.status);
+    return res.json();
+  };
+
+  const createRelease = async ({ tagName, name, body, isDraft = false, isPrerelease = false }) => {
+    if (!GITHUB.token || GITHUB.token === "YOUR_GITHUB_TOKEN") throw new Error("GitHub token not set in config.js");
+    const res = await fetch(`https://api.github.com/repos/${GITHUB.repoOwner}/${GITHUB.repoName}/releases`, {
+      method: "POST",
+      headers: ghHeaders(),
+      body: JSON.stringify({ tag_name: tagName, name, body, draft: isDraft, prerelease: isPrerelease }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Create release failed (" + res.status + ")");
+    }
+    return res.json();
+  };
+
+  const uploadReleaseAsset = async (releaseId, file) => {
+    // First get the release's upload_url (templated, remove {?name,label})
+    const release = await getRelease(releaseId);
+    const uploadUrl = release.upload_url.replace(/\{.*\}$/, "");
+    const res = await fetch(`${uploadUrl}?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { ...ghHeaders(), "Content-Type": file.type || "application/octet-stream", "Content-Length": file.size },
+      body: file,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Asset upload failed (" + res.status + ")");
+    }
+    return res.json();
+  };
+
+  const getRelease = async (releaseId) => {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB.repoOwner}/${GITHUB.repoName}/releases/${releaseId}`, {
+      headers: ghHeaders(),
+    });
+    if (!res.ok) throw new Error("Get release failed (" + res.status + ")");
+    return res.json();
+  };
+
+  const editRelease = async (releaseId, { body }) => {
+    const res = await fetch(`https://api.github.com/repos/${GITHUB.repoOwner}/${GITHUB.repoName}/releases/${releaseId}`, {
+      method: "PATCH",
+      headers: ghHeaders(),
+      body: JSON.stringify({ body }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || "Edit release failed (" + res.status + ")");
+    }
+    return res.json();
+  };
+
+  const deleteRelease = async (releaseId, { deleteAssets = true } = {}) => {
+    if (deleteAssets) {
+      const release = await getRelease(releaseId);
+      for (const asset of release.assets || []) {
+        await fetch(`https://api.github.com/repos/${GITHUB.repoOwner}/${GITHUB.repoName}/releases/assets/${asset.id}`, {
+          method: "DELETE",
+          headers: ghHeaders(),
+        });
+      }
+    }
+    const res = await fetch(`https://api.github.com/repos/${GITHUB.repoOwner}/${GITHUB.repoName}/releases/${releaseId}`, {
+      method: "DELETE",
+      headers: ghHeaders(),
+    });
+    if (!res.ok) throw new Error("Delete release failed (" + res.status + ")");
+  };
+
+  /* Min-supported marker helpers */
+  const MIN_SUPPORTED_REGEX = /<!--\s*min_supported:\s*([0-9][0-9A-Za-z.\-_]*)\s*-->/;
+  const parseMinSupported = (body) => {
+    const m = body.match(MIN_SUPPORTED_REGEX);
+    return m ? m[1] : null;
+  };
+  const setMinSupported = (body, version) => {
+    const stripped = body.replace(MIN_SUPPORTED_REGEX, "").trim();
+    return version ? `${stripped}\n\n<!-- min_supported: ${version} -->` : stripped;
+  };
+
+  return { open, getAll, put, del, getMeta, putFile, getFile, delFile, fileUrl, exportJSON, importJSON, eraseAllData, storageEstimate, login, logout, loggedIn, updateOwnAccount, listTeam, inviteTeamMember, removeTeamMember, resetTeamPassword, listAllRequests, updateRequest, deleteRequest, listAllFeedback, updateFeedback, deleteFeedback, listReleases, createRelease, uploadReleaseAsset, getRelease, editRelease, deleteRelease, parseMinSupported, setMinSupported, GITHUB };
 })();

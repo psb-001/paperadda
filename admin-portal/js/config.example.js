@@ -6,6 +6,15 @@ const SUPABASE = {
   anonKey: "YOUR_SUPABASE_ANON_KEY"
 };
 
+/* GitHub Releases — the app checks these for updates. Create a classic
+ * personal access token (repo scope) at github.com/settings/tokens and
+ * paste it here. Never commit config.js. */
+const GITHUB = {
+  token: "YOUR_GITHUB_TOKEN",
+  repoOwner: "psb-001",
+  repoName: "paperadda",
+};
+
 /* Fixed taxonomy (mirrors the Android app). COMMON = First Year (all branches). */
 const BRANCHES = [
   { code: 'COMMON', fullName: 'First Year (All Branches)' },
