@@ -122,18 +122,38 @@ function wireDropzone(dropId, fileId, infoId, onFile) {
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
     e.preventDefault(); drop.classList.remove("over");
   }));
-  drop.addEventListener("drop", (e) => {
-    if (e.dataTransfer.files.length) onFile(e.dataTransfer.files[0]);
+  drop.addEventListener("drop", async (e) => {
+    if (e.dataTransfer.files.length) await onFile(e.dataTransfer.files[0]);
   });
-  input.addEventListener("change", () => {
-    if (input.files.length) onFile(input.files[0]);
+  input.addEventListener("change", async () => {
+    if (input.files.length) await onFile(input.files[0]);
   });
 }
 
-function acceptPdf(file) {
+async function acceptPdf(file) {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
     toast("Please choose a PDF", "err");
     return false;
+  }
+  if (!(await isPdfContent(file))) {
+    toast("That file is not a valid PDF", "err");
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Confirms the file actually starts with the PDF magic bytes, not just a
+ * .pdf name. Prevents someone uploading HTML/JavaScript as a .pdf and getting
+ * XSS when it is opened (the storage bucket serves whatever Content-Type the
+ * upload carried).
+ */
+async function isPdfContent(file) {
+  const slice = file.slice(0, 5);
+  const buf = await slice.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  for (let i = 0; i < 5; i++) {
+    if (bytes[i] !== "%PDF-".charCodeAt(i)) return false;
   }
   return true;
 }
@@ -530,8 +550,8 @@ function openPaperModal(existing) {
     advBtn.textContent = (open ? "▾" : "▸") + (open ? " Hide options" : " More options (duration, marks…)");
   });
 
-  wireDropzone("mDrop", "mFile", "mFileInfo", (file) => {
-    if (!acceptPdf(file)) return;
+  wireDropzone("mDrop", "mFile", "mFileInfo", async (file) => {
+    if (!(await acceptPdf(file))) return;
     state.pendingFile = file;
     $("#mFileInfo").innerHTML = `<div class="file-chip">📄 ${esc(file.name)} · ${fmtBytes(file.size)} — ready to upload</div>`;
     // Suggest title from filename if empty
@@ -730,7 +750,7 @@ function addBulkFiles(fileList) {
       b.file.name === f.name && b.file.size === f.size);
     if (already) { skipped.dup++; continue; }
     if (state.bulkFiles.length >= BULK_MAX_FILES) { skipped.full++; continue; }
-    state.bulkFiles.push({ file: f, year: "", title: "", status: "pending", error: "" });
+    state.bulkFiles.push({ file: f, year: "", title: "", status: "pending", error: "", isPdfChecked: false });
   }
   applyBulkDefaults();
   renderBulkRows();
@@ -903,6 +923,15 @@ async function runBulkUpload() {
     while (used.has(id)) id = base + "_" + slug(year) + "_" + (n++);
     used.add(id);
 
+    if (!row.isPdfChecked) {
+      if (!(await isPdfContent(row.file))) {
+        row.status = "failed";
+        row.error = "Not a valid PDF";
+        renderBulkRows();
+        continue;
+      }
+      row.isPdfChecked = true;
+    }
     row.status = "uploading";
     row.error = "";
     renderBulkRows();
@@ -1415,8 +1444,8 @@ function openNoteModal(existing) {
   syncYear();
   refreshNoteSubjects();
 
-  wireDropzone("nDrop", "nFile", "nFileInfo", (file) => {
-    if (!acceptPdf(file)) return;
+  wireDropzone("nDrop", "nFile", "nFileInfo", async (file) => {
+    if (!(await acceptPdf(file))) return;
     state.pendingFile = file;
     $("#nFileInfo").innerHTML = `<div class="file-chip">📄 ${esc(file.name)} · ${fmtBytes(file.size)} — ready</div>`;
   });
@@ -1787,13 +1816,15 @@ function renderData() {
       <p class="muted">${esc(session.email || "")}</p>
       <div class="field"><label>Display name</label>
         <input id="acctName" value="${esc(session.displayName || "")}" placeholder="Your name" autocomplete="off" /></div>
+      <div class="field"><label>Current password</label>
+        <input id="acctCurrentPass" type="password" placeholder="••••••••" autocomplete="current-password" /></div>
       <div class="field-row">
         <div class="field"><label>New password</label>
           <input id="acctPass" type="password" placeholder="••••••••" autocomplete="new-password" /></div>
         <div class="field"><label>Confirm password</label>
           <input id="acctPass2" type="password" placeholder="••••••••" autocomplete="new-password" /></div>
       </div>
-      <p class="hint">Leave passwords blank to keep the current one. Min 8 characters.</p>
+      <p class="hint">Leave passwords blank to keep the current one. Min 8 characters. Changing anything requires your current password.</p>
       <button class="btn tonal" id="btnAcctSave">Save account</button>
       <button class="btn secondary" id="btnSettingsLogout">Log out</button>
     </div>
@@ -1858,8 +1889,16 @@ feedback(id, category, message, email, appVersion,
     try {
       const pass = $("#acctPass").value;
       const pass2 = $("#acctPass2").value;
+      const currentPass = $("#acctCurrentPass").value;
       if (pass !== pass2) { toast("Passwords do not match", "err"); return; }
       const patch = { displayName: $("#acctName").value.trim() };
+      if (!pass && !currentPass) { toast("Enter your current password to confirm.", "err"); return; }
+      // Re-authenticate with the current password before changing anything.
+      const session = JSON.parse(localStorage.getItem("paperadda-admin-session") || "{}");
+      try { await DB.login(session.email || "", currentPass); } catch (e) {
+        toast("Current password is incorrect", "err");
+        return;
+      }
       if (pass) patch.password = pass;
       await DB.updateOwnAccount(patch);
       toast("Account updated", "ok");
