@@ -43,17 +43,41 @@ cd android
 
 ### Backend connectivity (Supabase)
 
-- Plain HTTPS + `org.json`, no HTTP dependency.
-- Reads are paged with `Range` headers (500/page). PostgREST caps responses at `max_rows` — unpaged reads silently truncate.
-- Retries with backoff for transient failures only (offline, 5xx, 429). 4xx/malformed are never retried.
-- `network_security_config.xml` enforces HTTPS only.
-- Downloads must start with `%PDF-`; otherwise deleted and reported.
-- Request/feedback text is length-capped; email validated before sending.
+The REST client (`data/remote`) is plain HTTPS + `org.json` — no HTTP dependency. What it guarantees:
+
+- **Paged reads.** Reads use `Range` headers (500/page). PostgREST caps responses at `max_rows` — unpaged reads silently truncate.
+- **Retries with backoff** for transient failures only (offline, 5xx, 429). 4xx/malformed are never retried.
+- **Timeouts and gzip** on every connection, and one `SupabaseException` type whose message is already student-readable.
+- **HTTPS only**, enforced by `network_security_config.xml`.
+- **Uploaded files are checked.** Downloads must start with `%PDF-` (spec allows up to 1024 leading bytes); otherwise deleted and reported.
+- **Request/feedback text is length-capped**; email validated before sending.
+
+### Security findings & remediations (from full audit)
+
+| # | Severity | Finding | Fix |
+|---|----------|---------|-----|
+| C1 | Critical | Supabase anon key hardcoded in `SupabaseConfig.kt` | Moved to `android/local.properties` (`supabase.anon.key=...`), gitignored. Compiled-in fallback remains for fresh clones. |
+| C2 | Critical | Release keystore passwords in `keystore/release-keystore.pw` | Already gitignored; never commit. Back up offline. |
+| H1 | High | Admin session in `localStorage` (portal) | Migrated to `sessionStorage` in `admin-portal/js/db.js`. |
+| H2 | High | Hardcoded admin email seeded in `supabase-setup.sql` | Removed seed; provision initial admin out-of-band (documented in SQL). |
+| H3/H4 | High | `content_requests`/`feedback` RLS blocked all access | Added `admin read requests` / `admin read feedback` SELECT policies for authenticated admins. |
+| M1 | Medium | Supabase anon key sent to GitHub API | Removed — GitHub public releases endpoint needs no auth. |
 
 ### Known backend issues (Supabase dashboard/functions, not this repo)
 
-1. `content-requests` / `feedback` Edge Functions trust a client-generated `requesterKey`/`feedbackKey` as caller identity. Anyone with another user's key can read/delete their requests. Fix: require a Supabase auth session (`auth.uid()`), rate-limit the endpoints.
-2. Both functions answer without an `apikey` header (JWT verification off). Turn verification back on once the functions validate input themselves.
+1. **`content-requests` / `feedback` Edge Functions trust client-generated identity keys.** Anyone with another user's `requesterKey`/`feedbackKey` can read/delete their requests. Fix: require Supabase auth session (`auth.uid()`), rate-limit endpoints.
+2. **JWT verification off on functions.** Both functions answer without an `apikey` header. Turn verification back on once functions validate input themselves.
+3. **No login rate-limiting on the admin portal.** Supabase Auth rate-limits by IP, but the portal doesn't track failed attempts client-side. Consider adding a lockout counter.
+
+### Admin portal (`admin-portal/`)
+
+Static admin UI → Cloudflare Worker `paperadda-admin`. Opens at `https://paperadda-admin.paperadda.workers.dev`. Sign in with admin credentials; manages subjects, papers, notes, student requests, feedback, team members, backups.
+
+- `admin-portal/js/config.js` and `public/js/config.js` are **gitignored** — copy `config.example.js` and add your Supabase URL + anon key.
+- `supabase-setup.sql` — run this in your Supabase SQL editor to create tables, RLS policies, and the storage bucket.
+- All uploads are validated as real PDFs (magic bytes `%PDF-`), not just extension.
+- Account changes require re-authenticating with the current password.
+
 
 ### Release
 

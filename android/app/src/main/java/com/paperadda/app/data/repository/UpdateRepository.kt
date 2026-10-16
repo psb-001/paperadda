@@ -85,7 +85,7 @@ class UpdateRepository(
         val url = URL("https://api.github.com/repos/$repoOwner/$repoName/releases/latest")
         val connection = HttpSupport.get(
             url = url,
-            apiKey = SupabaseConfig.ANON_KEY,
+            apiKey = null,
             useAuthHeader = false,
             extraHeaders = mapOf("Accept" to "application/vnd.github+json")
         )

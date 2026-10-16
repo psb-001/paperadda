@@ -75,13 +75,13 @@ internal object HttpSupport {
      */
     fun get(
         url: URL,
-        apiKey: String,
+        apiKey: String?,
         useAuthHeader: Boolean = true,
         range: String? = null,
         extraHeaders: Map<String, String> = emptyMap()
     ): HttpURLConnection = open(url) {
-        setRequestProperty("apikey", apiKey)
-        if (useAuthHeader) setRequestProperty("Authorization", "Bearer $apiKey")
+        apiKey?.let { setRequestProperty("apikey", it) }
+        if (useAuthHeader && apiKey != null) setRequestProperty("Authorization", "Bearer $apiKey")
         setRequestProperty("Accept", "application/json")
         setRequestProperty("Accept-Encoding", "gzip")
         setRequestProperty("User-Agent", "PaperAdda-Android")

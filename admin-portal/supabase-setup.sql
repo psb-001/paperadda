@@ -47,6 +47,11 @@ create table if not exists admin_users (
   created_at timestamptz not null default now()
 );
 
+-- NOTE: No seed admin is inserted here. Provision the initial admin out-of-band
+-- (e.g. via Supabase Dashboard or a one-off SQL insert) to avoid baking a
+-- credential into version control. The first admin can then manage the roster
+-- through the admin portal's Settings > Team page.
+
 create table if not exists content_requests (
   id uuid primary key default gen_random_uuid(),
   requester_key uuid not null,
@@ -192,18 +197,18 @@ create policy "admin manage roster" on public.admin_users
   for all to authenticated using (private.is_admin()) with check (private.is_admin());
 
 drop policy if exists "service only requests" on public.content_requests;
-create policy "service only requests" on public.content_requests
+create policy "admin read requests" on public.content_requests
+  for select to authenticated using (private.is_admin());
+create policy "service manage requests" on public.content_requests
   for all to anon, authenticated using (false) with check (false);
 
 drop policy if exists "service only feedback" on public.feedback;
-create policy "service only feedback" on public.feedback
+create policy "admin read feedback" on public.feedback
+  for select to authenticated using (private.is_admin());
+create policy "service manage feedback" on public.feedback
   for all to anon, authenticated using (false) with check (false);
 
 drop function if exists public.is_admin();
-
-insert into public.admin_users (email)
-values ('chillmaaryaaar@proton.me')
-on conflict (email) do update set email = excluded.email;
 
 insert into storage.buckets (id, name, public)
 values ('papers', 'papers', true)
