@@ -18,27 +18,25 @@ class NoteRepository(
 ) {
     val notes: Flow<List<NoteEntity>> = noteDao.getAllNotes()
 
-    suspend fun refreshFromRemote(remote: SupabaseRemoteDataSource): Boolean =
-        withContext(Dispatchers.IO) {
-            try {
-                val remoteNotes = remote.fetchNotes()
-                noteDao.clear()
-                noteDao.insertAll(remoteNotes.map {
-                    NoteEntity(
-                        id = it.id ?: 0L,
-                        title = it.title,
-                        content = it.content,
-                        subjectName = it.subjectName,
-                        branchCode = it.branchCode,
-                        academicYear = it.academicYear,
-                        fileUrl = it.fileUrl,
-                        storagePath = it.storagePath
-                    )
-                })
-                true
-            } catch (e: Exception) {
-                SupabaseRemoteDataSource.logSyncError(e)
-                false
-            }
-        }
+    /**
+     * Mirrors the remote notes list into Room. Throws [SupabaseException] so
+     * callers surface a specific failure instead of a generic boolean —
+     * matching [PaperRepository.refreshFromRemote].
+     */
+    suspend fun refreshFromRemote(remote: SupabaseRemoteDataSource) = withContext(Dispatchers.IO) {
+        val remoteNotes = remote.fetchNotes()
+        noteDao.clear()
+        noteDao.insertAll(remoteNotes.map {
+            NoteEntity(
+                id = it.id ?: 0L,
+                title = it.title,
+                content = it.content,
+                subjectName = it.subjectName,
+                branchCode = it.branchCode,
+                academicYear = it.academicYear,
+                fileUrl = it.fileUrl,
+                storagePath = it.storagePath
+            )
+        })
+    }
 }

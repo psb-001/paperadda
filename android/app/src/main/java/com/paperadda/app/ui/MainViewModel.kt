@@ -18,6 +18,7 @@ import com.paperadda.app.data.model.Branch
 import com.paperadda.app.data.model.QuestionPaper
 import com.paperadda.app.data.model.Subject
 import com.paperadda.app.data.remote.SupabaseConfig
+import com.paperadda.app.data.remote.SupabaseException
 import com.paperadda.app.data.remote.SupabaseRemoteDataSource
 import com.paperadda.app.data.repository.ContentRequest
 import com.paperadda.app.data.repository.ContentRequestRepository
@@ -411,8 +412,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "Couldn't sync the latest papers (${result.message}). Showing offline data."
                 }
             }
-            if (!noteRepository.refreshFromRemote(remote) && syncErrorMessage == null) {
-                syncErrorMessage = "Couldn't sync the latest notes. Showing offline data."
+            try {
+                noteRepository.refreshFromRemote(remote)
+            } catch (e: SupabaseException) {
+                if (syncErrorMessage == null) {
+                    syncErrorMessage =
+                        "Couldn't sync the latest notes: ${e.message} Showing offline data."
+                }
             }
             // After any cache load, so PDFs left behind by a database
             // recreation get their rows back instead of looking undownloaded.

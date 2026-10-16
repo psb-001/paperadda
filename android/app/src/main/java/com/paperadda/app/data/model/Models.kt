@@ -86,7 +86,9 @@ data class QuestionPaper(
                 .sortedByDescending { it.length }
             for (prefix in prefixes) {
                 if (rest.startsWith(prefix, ignoreCase = true)) {
-                    rest = rest.removePrefix(prefix).trimStart(' ', '-', '—', '–', ':', '|', ',')
+                    // removePrefix is case-sensitive; startsWith is not, so
+                    // cut by length instead of by string match.
+                    rest = rest.substring(prefix.length).trimStart(' ', '-', '—', '–', ':', '|', ',')
                     if (rest.isNotEmpty()) return rest
                 }
             }
